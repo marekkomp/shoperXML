@@ -3,9 +3,9 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Filtr ofert – kategoria / producent / status / cena / nazwa", layout="wide")
-st.title("⚙️ Filtr ofert – kategoria / producent / status / cena / nazwa")
-st.caption("Wgraj CSV/XLSX → wybierz status (Dostępność), kategorię, producenta, zakres cen i/lub frazę w nazwie. Widok zawsze pokazuje tylko kolumny niepuste dla wyniku.")
+st.set_page_config(page_title="Filtr ofert – kategoria / producent / status / cena / nazwa / stan", layout="wide")
+st.title("⚙️ Filtr ofert – kategoria / producent / status / cena / nazwa / stan")
+st.caption("Wgraj CSV/XLSX → wybierz status (Dostępność), kategorię, producenta, zakres cen, stan i/lub frazę w nazwie. Widok zawsze pokazuje tylko kolumny niepuste dla wyniku.")
 
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
@@ -13,7 +13,6 @@ def read_any_table(file) -> pd.DataFrame:
     name = file.name.lower()
     if name.endswith((".xlsx", ".xlsm", ".xls")):
         return pd.read_excel(file)
-    # CSV/TSV — autodetekcja separatora
     try:
         df = pd.read_csv(file, sep=None, engine="python")
     except Exception:
@@ -29,7 +28,7 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 # ---------- Upload ----------
-upload = st.file_uploader("Wgraj plik z ofertami (CSV lub XLSX)", type=["csv", "xlsx", "xls", "xlsm"]) 
+upload = st.file_uploader("Wgraj plik z ofertami (CSV lub XLSX)", type=["csv", "xlsx", "xls", "xlsm"])
 if not upload:
     st.info("Wgraj plik, aby kontynuować.")
     st.stop()
@@ -49,84 +48,61 @@ if missing:
     st.error(f"Brak wymaganych kolumn: {', '.join(missing)}")
     st.stop()
 
-# Normalizacja pomocnicza (bez kontrolek – zawsze aktywna)
-cat_series_orig = df["Kategoria"].astype(str).str.strip()
-prod_series_orig = df["Producent"].astype(str).str.strip()
-name_series_orig = df["Nazwa"].astype(str)
+# Normalizacja pomocnicza
+df_cols = {c.lower(): c for c in df.columns}
+cat_series = df[df_cols.get("kategoria", "Kategoria")].astype(str).str.strip()
+prod_series = df[df_cols.get("producent", "Producent")].astype(str).str.strip()
+name_series = df[df_cols.get("nazwa", "Nazwa")].astype(str)
+price = pd.to_numeric(df[df_cols.get("cena", "Cena")], errors="coerce")
 
-cat_series_norm = cat_series_orig.str.casefold()
-prod_series_norm = prod_series_orig.str.casefold()
-
-# Cena na float (kropka w danych)
-price = pd.to_numeric(df["Cena"], errors="coerce")
-
-# ---------- Sidebar: filtry ----------
+# ---------- Sidebar: filtry główne ----------
 st.sidebar.header("Ustawienia filtrowania")
 
-# Status wg Dostępność: 1 aktywny, 99 nieaktywny
 status_choice = st.sidebar.radio(
     "Status produktu (kolumna 'Dostępność')",
     options=["Wszystkie", "Aktywne (1)", "Nieaktywne (99)"],
     index=1,
 )
 
-# Kategoria – z unikalnych wartości (wiemy, która kolumna)
-cats_options = sorted(cat_series_orig.unique().tolist())
+cats_options = sorted(cat_series.unique().tolist())
 selected_cats = st.sidebar.multiselect("Kategoria", options=cats_options)
 
-# Producent
-prod_options = sorted(prod_series_orig.unique().tolist())
+prod_options = sorted(prod_series.unique().tolist())
 selected_prods = st.sidebar.multiselect("Producent", options=prod_options)
 
-# Zakres cen (od–do)
-min_price = float(pd.Series(price).min(skipna=True)) if price.notna().any() else 0.0
-max_price = float(pd.Series(price).max(skipna=True)) if price.notna().any() else 0.0
+min_price = float(price.min(skipna=True)) if price.notna().any() else 0.0
+max_price = float(price.max(skipna=True)) if price.notna().any() else 0.0
 c1, c2 = st.sidebar.columns(2)
 with c1:
     price_from = st.number_input("Cena od", value=min_price, min_value=0.0, step=1.0, format="%.2f")
 with c2:
     price_to = st.number_input("Cena do", value=max_price, min_value=0.0, step=1.0, format="%.2f")
-if price_from > price_to:
-    st.sidebar.warning("'Cena od' nie może być większa niż 'Cena do'.")
 
-# Szukaj po nazwie
+# Stan (zakres liczbowy w głównych filtrach)
+stan_range = None
+if "Stan" in df.columns:
+    stan_num = pd.to_numeric(df["Stan"], errors="coerce")
+    if stan_num.notna().any():
+        stan_min = float(stan_num.min())
+        stan_max = float(stan_num.max())
+        c1, c2 = st.sidebar.columns(2)
+        with c1:
+            stan_from = st.number_input("Stan od", value=stan_min, min_value=0.0, step=1.0, format="%.0f")
+        with c2:
+            stan_to = st.number_input("Stan do", value=stan_max, min_value=0.0, step=1.0, format="%.0f")
+        if stan_from <= stan_to:
+            stan_range = (stan_from, stan_to)
+
 name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
 
-# --- Filtry zaawansowane (zwinięte) ---
-with st.sidebar.expander("Filtry zaawansowane", expanded=False):
-    # 1) Stan (TYLKO kolumna dokładnie 'Stan', zakres liczbowy)
-    stan_range = None
-    if "Stan" in df.columns:
-        stan_num = pd.to_numeric(df["Stan"], errors="coerce")
-        if stan_num.notna().any():
-            stan_min = float(stan_num.min())
-            stan_max = float(stan_num.max())
-            c1, c2 = st.columns(2)
-            with c1:
-                stan_from = st.number_input("Stan od", value=stan_min, min_value=0.0, step=1.0, format="%.0f")
-            with c2:
-                stan_to = st.number_input("Stan do", value=stan_max, min_value=0.0, step=1.0, format="%.0f")
-            if stan_from > stan_to:
-                st.warning("'Stan od' nie może być większa niż 'Stan do'.")
-            else:
-                stan_range = (stan_from, stan_to)
-        else:
-            st.caption("Kolumna 'Stan' nie zawiera wartości liczbowych – filtr zakresu pominięty.")
-    else:
-        st.caption("Brak kolumny 'Stan'.")
-
-    # 2) ekran_dotykowy (wartości z tabeli)
+# ---------- Filtry zaawansowane (laptopy) ----------
+with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=False):
     ekr_sel = None
     if "ekran_dotykowy" in df.columns:
         ekr_vals = df["ekran_dotykowy"].dropna().astype(str).str.strip()
         ekr_opts = sorted(ekr_vals.unique().tolist(), key=lambda x: str(x).lower())
-        if len(ekr_opts) <= 3:
-            ekr_choice = st.radio("ekran_dotykowy", options=["(Wszystkie)"] + ekr_opts, index=0)
-            ekr_sel = [] if ekr_choice == "(Wszystkie)" else [ekr_choice]
-        else:
-            ekr_sel = st.multiselect("ekran_dotykowy", options=ekr_opts, default=[])
+        ekr_sel = st.multiselect("ekran_dotykowy", options=ekr_opts, default=[])
 
-    # 3) ilosc_rdzeni (zakres liczbowy)
     rdzenie_range = None
     if "ilosc_rdzeni" in df.columns:
         rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
@@ -139,24 +115,19 @@ with st.sidebar.expander("Filtry zaawansowane", expanded=False):
                 rd_to = st.number_input("Rdzenie do", value=float(rmax), min_value=0.0, step=1.0, format="%.0f")
             if rd_from <= rd_to:
                 rdzenie_range = (int(rd_from), int(rd_to))
-            else:
-                st.warning("'Rdzenie od' > 'Rdzenie do'.")
 
-    # 4) kondycja_sprzetu (multiselect)
     kond_sel = None
     if "kondycja_sprzetu" in df.columns:
         v = df["kondycja_sprzetu"].dropna().astype(str).str.strip()
         opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
         kond_sel = st.multiselect("kondycja_sprzetu", options=opts, default=[])
 
-    # 5) procesor (multiselect z tabeli)
     proc_sel = None
     if "procesor" in df.columns:
         v = df["procesor"].dropna().astype(str).str.strip()
         opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
         proc_sel = st.multiselect("procesor", options=opts, default=[])
 
-    # 6) przekatna_ekranu (zakres float)
     przek_range = None
     if "przekatna_ekranu" in df.columns:
         pe = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
@@ -169,31 +140,25 @@ with st.sidebar.expander("Filtry zaawansowane", expanded=False):
                 p_to = st.number_input("Przekątna do", value=pmax, min_value=0.0, step=0.1, format="%.1f")
             if p_from <= p_to:
                 przek_range = (p_from, p_to)
-            else:
-                st.warning("'Przekątna od' > 'Przekątna do'.")
 
-    # 7) rodzaj_karty_graficznej (multiselect)
     rodz_gpu_sel = None
     if "rodzaj_karty_graficznej" in df.columns:
         v = df["rodzaj_karty_graficznej"].dropna().astype(str).str.strip()
         opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
         rodz_gpu_sel = st.multiselect("rodzaj_karty_graficznej", options=opts, default=[])
 
-    # 8) rozdzielczosc_ekranu (multiselect)
     rozdz_sel = None
     if "rozdzielczosc_ekranu" in df.columns:
         v = df["rozdzielczosc_ekranu"].dropna().astype(str).str.strip()
         opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
         rozdz_sel = st.multiselect("rozdzielczosc_ekranu", options=opts, default=[])
 
-    # 9) stan_obudowy (multiselect)
     stan_ob_sel = None
     if "stan_obudowy" in df.columns:
         v = df["stan_obudowy"].dropna().astype(str).str.strip()
         opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
         stan_ob_sel = st.multiselect("stan_obudowy", options=opts, default=[])
 
-    # 10) typ_pamieci_ram (multiselect)
     typ_ram_sel = None
     if "typ_pamieci_ram" in df.columns:
         v = df["typ_pamieci_ram"].dropna().astype(str).str.strip()
@@ -203,104 +168,57 @@ with st.sidebar.expander("Filtry zaawansowane", expanded=False):
 # ---------- Filtrowanie ----------
 mask = pd.Series(True, index=df.index)
 
-# Status
 if status_choice != "Wszystkie":
     d = pd.to_numeric(df["Dostępność"], errors="coerce")
-    if "Aktywne" in status_choice:
-        mask &= (d == 1)
-    else:
-        mask &= (d == 99)
+    mask &= (d == 1) if "Aktywne" in status_choice else (d == 99)
 
-# Kategoria (normalizacja case/trim w porównaniu)
 if selected_cats:
-    selected_norm = pd.Series(selected_cats).astype(str).str.strip().str.casefold().tolist()
-    mask &= cat_series_norm.isin(selected_norm)
+    mask &= cat_series.isin(selected_cats)
 
-# Producent
 if selected_prods:
-    selected_p_norm = pd.Series(selected_prods).astype(str).str.strip().str.casefold().tolist()
-    mask &= prod_series_norm.isin(selected_p_norm)
+    mask &= prod_series.isin(selected_prods)
 
-# Cena
 if price.notna().any():
     mask &= price.between(price_from, price_to, inclusive="both")
 
-# Nazwa (substring, case-insensitive)
-if name_query.strip():
-    mask &= name_series_orig.str.contains(name_query.strip(), case=False, na=False)
-
-# Stan (zakres liczbowy)
-if 'stan_range' in locals() and stan_range is not None and "Stan" in df.columns:
+if stan_range is not None and "Stan" in df.columns:
     stan_num_all = pd.to_numeric(df["Stan"], errors="coerce")
     mask &= stan_num_all.between(stan_range[0], stan_range[1], inclusive="both")
 
-# ekran_dotykowy
-if 'ekr_sel' in locals() and ekr_sel:
-    cmp = df["ekran_dotykowy"].astype(str).str.strip().str.casefold()
-    target = pd.Series(ekr_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
+if name_query.strip():
+    mask &= name_series.str.contains(name_query.strip(), case=False, na=False)
 
-# ilosc_rdzeni
-if 'rdzenie_range' in locals() and rdzenie_range is not None and "ilosc_rdzeni" in df.columns:
+# --- Filtry zaawansowane (laptopy) ---
+for col, sel in {
+    "ekran_dotykowy": ekr_sel,
+    "kondycja_sprzetu": kond_sel,
+    "procesor": proc_sel,
+    "rodzaj_karty_graficznej": rodz_gpu_sel,
+    "rozdzielczosc_ekranu": rozdz_sel,
+    "stan_obudowy": stan_ob_sel,
+    "typ_pamieci_ram": typ_ram_sel,
+}.items():
+    if sel:
+        cmp = df[col].astype(str).str.strip().str.casefold()
+        target = pd.Series(sel).astype(str).str.strip().str.casefold().tolist()
+        mask &= cmp.isin(target)
+
+if rdzenie_range is not None and "ilosc_rdzeni" in df.columns:
     r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
     mask &= r_all.between(rdzenie_range[0], rdzenie_range[1], inclusive="both")
 
-# kondycja_sprzetu
-if 'kond_sel' in locals() and kond_sel:
-    cmp = df["kondycja_sprzetu"].astype(str).str.strip().str.casefold()
-    target = pd.Series(kond_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
-# procesor
-if 'proc_sel' in locals() and proc_sel:
-    cmp = df["procesor"].astype(str).str.strip().str.casefold()
-    target = pd.Series(proc_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
-# przekatna_ekranu
-if 'przek_range' in locals() and przek_range is not None and "przekatna_ekranu" in df.columns:
+if przek_range is not None and "przekatna_ekranu" in df.columns:
     p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
     mask &= p_all.between(przek_range[0], przek_range[1], inclusive="both")
 
-# rodzaj_karty_graficznej
-if 'rodz_gpu_sel' in locals() and rodz_gpu_sel:
-    cmp = df["rodzaj_karty_graficznej"].astype(str).str.strip().str.casefold()
-    target = pd.Series(rodz_gpu_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
-# rozdzielczosc_ekranu
-if 'rozd_sel' in locals() and rozdz_sel:
-    cmp = df["rozdzielczosc_ekranu"].astype(str).str.strip().str.casefold()
-    target = pd.Series(rozd_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
-# stan_obudowy
-if 'stan_ob_sel' in locals() and stan_ob_sel:
-    cmp = df["stan_obudowy"].astype(str).str.strip().str.casefold()
-    target = pd.Series(stan_ob_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
-# typ_pamieci_ram
-if 'typ_ram_sel' in locals() and typ_ram_sel:
-    cmp = df["typ_pamieci_ram"].astype(str).str.strip().str.casefold()
-    target = pd.Series(typ_ram_sel).astype(str).str.strip().str.casefold().tolist()
-    mask &= cmp.isin(target)
-
 filtered = df.loc[mask].copy()
 
-# ---------- Wynik i widok (zawsze tylko kolumny niepuste) ----------
+# ---------- Wynik ----------
 if filtered.empty:
     st.warning("Brak wierszy po zastosowaniu filtrów.")
     st.stop()
 
-# Lista kolumn z co najmniej jedną niepustą wartością
-non_empty_cols = []
-for c in filtered.columns:
-    s = filtered[c]
-    has_value = s.notna() & ~s.astype(str).str.strip().eq("")
-    if has_value.any():
-        non_empty_cols.append(c)
-
+non_empty_cols = [c for c in filtered.columns if (filtered[c].notna() & ~filtered[c].astype(str).str.strip().eq("")).any()]
 view_df = filtered[non_empty_cols]
 
 st.subheader("Wynik")
@@ -314,19 +232,9 @@ st.subheader("Pobierz wynik")
 c1, c2 = st.columns(2)
 with c1:
     csv_bytes = view_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="⬇️ CSV – widok (kolumny niepuste)",
-        data=csv_bytes,
-        file_name="oferty_widok_niepuste.csv",
-        mime="text/csv",
-    )
+    st.download_button("⬇️ CSV – widok (kolumny niepuste)", csv_bytes, "oferty_widok_niepuste.csv", "text/csv")
 with c2:
     xlsx_bytes = to_excel_bytes(view_df)
-    st.download_button(
-        label="⬇️ XLSX – widok (kolumny niepuste)",
-        data=xlsx_bytes,
-        file_name="oferty_widok_niepuste.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    st.download_button("⬇️ XLSX – widok (kolumny niepuste)", xlsx_bytes, "oferty_widok_niepuste.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 st.caption("Normalizacja (trim + case-insensitive) jest zawsze aktywna. Widok ukrywa kolumny bez wartości w aktualnym wyniku.")
