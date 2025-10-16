@@ -73,11 +73,35 @@ col_category = st.sidebar.selectbox(
 col_active = st.sidebar.selectbox(
     "Kolumna ze statusem aktywności (np. 'Aktywny')",
     options=["(brak)"] + df.columns.tolist(),
-    index=next((i+1 for i, c in enumerate(df.columns) if c.lower() in {"aktywny", "active", "status"}), 0)
+    index=next((i+1 for i, c in enumerate(df.columns) if c.lower() in {"stan", "aktywny", "active", "status"}), 0)
 )
 
 # Filtry wartości
 cats = sorted(df[col_category].dropna().astype(str).unique().tolist())
+selected_cats = st.sidebar.multiselect("Filtr kategorii (pozostaw puste = wszystkie)", options=cats, help="Np. wybierz 'laptopy'.")
+
+# Filtr PRODUCENT (jeśli kolumna istnieje)
+producer_filter_values = None
+if "Producent" in df.columns:
+    producers = sorted(df["Producent"].dropna().astype(str).unique().tolist())
+    producer_filter_values = st.sidebar.multiselect(
+        "Filtr Producent (opcjonalnie)", options=producers
+    )
+
+active_values_selected = None
+if col_active != "(brak)":
+    vals, preselect = detect_active_values(df[col_active])
+    # Jeżeli kolumna to dokładnie 'Stan' (0 = niedostępny), domyślnie wybierz '1' jako aktywne
+    if col_active.lower() == "stan":
+        preselect = [v for v in vals if str(v).strip() == "1"] or preselect
+    active_values_selected = st.sidebar.multiselect(
+        "Które wartości uznawać za 'Aktywne'?",
+        options=vals,
+        default=preselect,
+        help="Domyślnie dla kolumny 'Stan': 1=aktywne, 0=niedostępne."
+    )
+
+ sorted(df[col_category].dropna().astype(str).unique().tolist())
 selected_cats = st.sidebar.multiselect("Filtr kategorii (pozostaw puste = wszystkie)", options=cats)
 
 active_values_selected = None
@@ -95,8 +119,12 @@ mask = pd.Series(True, index=df.index)
 if selected_cats:
     mask &= df[col_category].astype(str).isin(selected_cats)
 
+# Producent
+if producer_filter_values:
+    mask &= df["Producent"].astype(str).isin(producer_filter_values)
+
+# Aktywność
 if col_active != "(brak)" and active_values_selected is not None:
-    # Traktuj puste jako nieaktywne
     active_norm = df[col_active].fillna("").astype(str).str.strip()
     mask &= active_norm.isin([str(v) for v in active_values_selected])
 
@@ -121,8 +149,21 @@ for c in filtered.columns:
 
 filtered_non_empty = filtered[non_empty_cols]
 
-st.write(f"Wiersze: **{len(filtered_non_empty):,}** | Kolumny niepuste: **{len(non_empty_cols):,}** / {len(df.columns):,}")
-st.dataframe(filtered_non_empty, use_container_width=True, height=520)
+# Wybór kolumn do wyświetlenia
+preferred_cols = [
+    "ID","Nazwa","SKU","EAN","Producent","Kategoria","Cena","Dostępność","Stan","URL"
+]
+available_defaults = [c for c in preferred_cols if c in filtered_non_empty.columns]
+selected_cols_show = st.sidebar.multiselect(
+    "Kolumny do pokazania",
+    options=non_empty_cols,
+    default=available_defaults if available_defaults else non_empty_cols[:min(20, len(non_empty_cols))]
+)
+
+view_df = filtered_non_empty[selected_cols_show] if selected_cols_show else filtered_non_empty
+
+st.write(f"Wiersze: **{len(view_df):,}** | Kolumny widoczne: **{len(view_df.columns):,}** (z niepustych: {len(non_empty_cols):,} / {len(df.columns):,})")
+st.dataframe(view_df, use_container_width=True, height=520)
 
 # ---------- Pobieranie ----------
 st.divider()
