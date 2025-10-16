@@ -70,10 +70,12 @@ col_category = st.sidebar.selectbox(
     index=next((i for i, c in enumerate(df.columns) if c.lower() in {"kategoria", "category", "kategoria allegro"}), 0)
 )
 
-col_active = st.sidebar.selectbox(
-    "Kolumna ze statusem aktywności (np. 'Aktywny')",
-    options=["(brak)"] + df.columns.tolist(),
-    index=next((i+1 for i, c in enumerate(df.columns) if c.lower() in {"stan", "aktywny", "active", "status"}), 0)
+# --- Status wg kolumny "Dostępność" (1 = aktywny, 99 = nieaktywny)
+status_filter = st.sidebar.radio(
+    "Status produktu (kolumna 'Dostępność')",
+    options=["Wszystkie", "Aktywne (1)", "Nieaktywne (99)"],
+    index=1,
+    help="Aktywne → Dostępność == 1, Nieaktywne → Dostępność == 99"
 )
 
 # Tryb dopasowania
@@ -106,20 +108,8 @@ if "Producent" in df.columns:
         "Filtr Producent (opcjonalnie)", options=producers
     )
 
-# Szybki przełącznik aktywności
-only_active_quick = False
-if col_active != "(brak)" and col_active.lower() == "stan":
-    only_active_quick = st.sidebar.checkbox("Pokaż tylko aktywne (Stan = 1)", value=True)
-
-active_values_selected = None
-if col_active != "(brak)":
-    vals, preselect = detect_active_values(df[col_active])
-    if col_active.lower() == "stan":
-        preselect = [v for v in vals if str(v).strip() == "1"] or preselect
-    active_values_selected = st.sidebar.multiselect(
-        "Które wartości uznawać za 'Aktywne'?",
-        options=vals,
-        default=(['1'] if only_active_quick else preselect),
+# Szukaj po nazwie (substring)
+name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="", help="Wpisz fragment nazwy (bez rozróżniania wielkości liter)"),
         help="Domyślnie dla kolumny 'Stan': 1=aktywne, 0=niedostępne."
     )
 
@@ -132,7 +122,6 @@ if selected_cats:
     if normalize_case:
         cat_series = cat_series.str.casefold()
     if cat_contains:
-        # dopasowanie 'zawiera' – jeżeli którakolwiek wybrana fraza znajduje się w wartości
         m = pd.Series(False, index=df.index)
         for val in selected_cats:
             m |= cat_series.str.contains(str(val), na=False)
@@ -152,10 +141,18 @@ if producer_filter_values is not None and len(producer_filter_values) > 0 and pr
     else:
         mask &= series_cmp.isin(producer_filter_values)
 
-# Aktywność
-if col_active != "(brak)" and active_values_selected is not None:
-    active_norm = df[col_active].fillna("").astype(str).str.strip()
-    mask &= active_norm.isin([str(v) for v in active_values_selected])
+# Status wg 'Dostępność'
+if "Dostępność" in df.columns and status_filter != "Wszystkie":
+    dost = pd.to_numeric(df["Dostępność"], errors="coerce")
+    if "Aktywne" in status_filter:
+        mask &= (dost == 1)
+    elif "Nieaktywne" in status_filter:
+        mask &= (dost == 99)
+
+# Szukaj po nazwie
+if name_query.strip():
+    names = df["Nazwa"].astype(str)
+    mask &= names.str.contains(name_query.strip(), case=False, na=False)
 
 filtered = df.loc[mask].copy()
 
@@ -164,14 +161,15 @@ with st.expander("🔎 Diagnostyka filtrów"):
     st.write({
         "wybrane_kategorie": selected_cats,
         "producent_wybrane": producer_filter_values,
-        "wartosci_aktywne": active_values_selected,
+        "status": status_filter,
+        "zapytanie_nazwa": name_query,
         "pozostalo_wierszy": int(len(filtered)),
     })
     st.write("Przykładowe wartości kolumn:")
     st.write({
         "Kategoria_top10": df[col_category].dropna().astype(str).str.strip().unique()[:10],
         "Producent_top10": (df["Producent"].dropna().astype(str).str.strip().unique()[:10] if "Producent" in df.columns else []),
-        "Stan_top10": df[col_active].dropna().astype(str).str.strip().unique()[:10] if col_active != "(brak)" else [],
+        "Dostepnosc_top10": (pd.to_numeric(df["Dostępność"], errors="coerce").dropna().unique()[:10] if "Dostępność" in df.columns else []),
     })
 
 st.subheader("Wynik po filtrach")
