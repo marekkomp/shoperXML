@@ -106,19 +106,14 @@ with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=False):
         ekr_opts = sorted(ekr_vals.unique().tolist(), key=lambda x: str(x).lower())
         ekr_sel = st.multiselect("ekran_dotykowy", options=ekr_opts, default=[])
 
-    rdzenie_range = None
+    rdzenie_sel = None
     if "ilosc_rdzeni" in df.columns:
-        rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
-        if rdz.notna().any():
-            rmin, rmax = int(rdz.min()), int(rdz.max())
-            c1, c2 = st.columns(2)
-            with c1:
-                rd_from = st.number_input("Rdzenie od", value=float(rmin), min_value=0.0, step=1.0, format="%.0f")
-            with c2:
-                rd_to = st.number_input("Rdzenie do", value=float(rmax), min_value=0.0, step=1.0, format="%.0f")
-            if rd_from <= rd_to:
-                rdzenie_range = (int(rd_from), int(rd_to))
+        rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").dropna().astype(int)
+        if not rdz.empty:
+            rd_opts = sorted(rdz.unique().tolist())
+            rdzenie_sel = st.multiselect("ilosc_rdzeni", options=rd_opts, default=[])
 
+    # 4) kondycja_sprzetu (multiselect)
     kond_sel = None
     if "kondycja_sprzetu" in df.columns:
         v = df["kondycja_sprzetu"].dropna().astype(str).str.strip()
@@ -206,9 +201,9 @@ for col, sel in {
         target = pd.Series(sel).astype(str).str.strip().str.casefold().tolist()
         mask &= cmp.isin(target)
 
-if rdzenie_range is not None and "ilosc_rdzeni" in df.columns:
-    r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
-    mask &= r_all.between(rdzenie_range[0], rdzenie_range[1], inclusive="both")
+if 'rdzenie_sel' in locals() and rdzenie_sel and "ilosc_rdzeni" in df.columns:
+    r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
+    mask &= r_all.isin(rdzenie_sel)
 
 if przek_range is not None and "przekatna_ekranu" in df.columns:
     p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
