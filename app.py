@@ -12,16 +12,17 @@ st.caption("Wgraj CSV/XLSX → wybierz kolumnę z kategorią i statusem aktywno�
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
 def read_any_table(file) -> pd.DataFrame:
-name = file.name.lower()
-if name.endswith((".xlsx", ".xlsm", ".xls")):
-return pd.read_excel(file)
-# CSV/TSV — spróbuj autodetekcji separatora
-try:
-df = pd.read_csv(file, sep=None, engine="python")
-except Exception:
-file.seek(0)
-df = pd.read_csv(file, sep=",", engine="python")
-return df
+    name = file.name.lower()
+    if name.endswith((".xlsx", ".xlsm", ".xls")):
+        return pd.read_excel(file)
+    # CSV/TSV — spróbuj autodetekcji separatora
+    try:
+        df = pd.read_csv(file, sep=None, engine="python")
+    except Exception:
+        file.seek(0)
+        df = pd.read_csv(file, sep=",", engine="python")
+    return df
+
 
 
 @st.cache_data(show_spinner=False)
