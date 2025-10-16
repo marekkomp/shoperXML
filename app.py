@@ -78,14 +78,19 @@ col_active = st.sidebar.selectbox(
 
 # Filtry wartości
 cats = sorted(df[col_category].dropna().astype(str).unique().tolist())
-selected_cats = st.sidebar.multiselect("Filtr kategorii (pozostaw puste = wszystkie)", options=cats, help="Np. wybierz 'laptopy'.")
+selected_cats = st.sidebar.multiselect(
+    "Filtr kategorii (pozostaw puste = wszystkie)",
+    options=cats,
+    help="Np. wybierz 'laptopy'."
+)
 
 # Filtr PRODUCENT (jeśli kolumna istnieje)
 producer_filter_values = None
 if "Producent" in df.columns:
     producers = sorted(df["Producent"].dropna().astype(str).unique().tolist())
     producer_filter_values = st.sidebar.multiselect(
-        "Filtr Producent (opcjonalnie)", options=producers
+        "Filtr Producent (opcjonalnie)",
+        options=producers
     )
 
 active_values_selected = None
@@ -100,113 +105,3 @@ if col_active != "(brak)":
         default=preselect,
         help="Domyślnie dla kolumny 'Stan': 1=aktywne, 0=niedostępne."
     )
-
- sorted(df[col_category].dropna().astype(str).unique().tolist())
-selected_cats = st.sidebar.multiselect("Filtr kategorii (pozostaw puste = wszystkie)", options=cats)
-
-active_values_selected = None
-if col_active != "(brak)":
-    vals, preselect = detect_active_values(df[col_active])
-    active_values_selected = st.sidebar.multiselect(
-        "Które wartości uznawać za 'Aktywne'?",
-        options=vals,
-        default=preselect,
-        help="Zaznacz, które wartości w tej kolumnie oznaczają aktywne oferty."
-    )
-
-# ---------- Filtrowanie wierszy ----------
-mask = pd.Series(True, index=df.index)
-if selected_cats:
-    mask &= df[col_category].astype(str).isin(selected_cats)
-
-# Producent
-if producer_filter_values:
-    mask &= df["Producent"].astype(str).isin(producer_filter_values)
-
-# Aktywność
-if col_active != "(brak)" and active_values_selected is not None:
-    active_norm = df[col_active].fillna("").astype(str).str.strip()
-    mask &= active_norm.isin([str(v) for v in active_values_selected])
-
-filtered = df.loc[mask].copy()
-
-st.subheader("Wynik po filtrach")
-st.caption("Poniżej zobaczysz TYLKO te kolumny, które mają co najmniej jedną niepustą wartość w wyfiltrowanych wierszach.")
-
-if filtered.empty:
-    st.warning("Brak wierszy po zastosowaniu filtrów.")
-    st.stop()
-
-# ---------- Wybór kolumn niepustych ----------
-# Definicja "puste": NaN lub ciąg pusty/whitespace po konwersji do stringa
-non_empty_cols = []
-for c in filtered.columns:
-    s = filtered[c]
-    # True jeśli istnieje jakakolwiek niepusta wartość w kolumnie
-    has_value = s.notna() & ~s.astype(str).str.strip().eq("")
-    if has_value.any():
-        non_empty_cols.append(c)
-
-filtered_non_empty = filtered[non_empty_cols]
-
-# Wybór kolumn do wyświetlenia
-preferred_cols = [
-    "ID","Nazwa","SKU","EAN","Producent","Kategoria","Cena","Dostępność","Stan","URL"
-]
-available_defaults = [c for c in preferred_cols if c in filtered_non_empty.columns]
-selected_cols_show = st.sidebar.multiselect(
-    "Kolumny do pokazania",
-    options=non_empty_cols,
-    default=available_defaults if available_defaults else non_empty_cols[:min(20, len(non_empty_cols))]
-)
-
-view_df = filtered_non_empty[selected_cols_show] if selected_cols_show else filtered_non_empty
-
-st.write(f"Wiersze: **{len(view_df):,}** | Kolumny widoczne: **{len(view_df.columns):,}** (z niepustych: {len(non_empty_cols):,} / {len(df.columns):,})")
-st.dataframe(view_df, use_container_width=True, height=520)
-
-# ---------- Pobieranie ----------
-st.divider()
-st.subheader("Pobierz wynik")
-
-c1, c2, c3 = st.columns(3)
-
-with c1:
-    csv_bytes = filtered_non_empty.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        label="⬇️ CSV – tylko kolumny niepuste",
-        data=csv_bytes,
-        file_name="oferty_niepuste_kolumny.csv",
-        mime="text/csv",
-    )
-
-with c2:
-    xlsx_bytes = to_excel_bytes(filtered_non_empty)
-    st.download_button(
-        label="⬇️ XLSX – tylko kolumny niepuste",
-        data=xlsx_bytes,
-        file_name="oferty_niepuste_kolumny.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-with c3:
-    # pełny widok: oryginalne kolumny, ale tylko wyfiltrowane wiersze
-    xlsx_full = to_excel_bytes(filtered)
-    st.download_button(
-        label="⬇️ XLSX – pełne kolumny (filtrowane wiersze)",
-        data=xlsx_full,
-        file_name="oferty_pelne_kolumny_filtrowane.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-# ---------- Dodatkowe opcje ----------
-with st.expander("Zaawansowane: ustawienia 'pustości' i numerów/zer"):
-    st.markdown(
-        """
-        **Definicja pustej komórki** w tej aplikacji to: `NaN` **lub** pusty ciąg / same spacje po konwersji do tekstu.
-        Wartość `0` (zero) **nie** jest traktowana jako pusta.
-        Jeśli potrzebujesz innej logiki (np. traktować `0` jako puste w kolumnie *Cena promocyjna*), daj znać – łatwo dodać przełącznik per kolumnę.
-        """
-    )
-
-st.caption("Autor: szablon do GitHub/Streamlit Cloud. Nie modyfikuje źródłowego pliku – działa tylko na widoku/eksporcie.")
