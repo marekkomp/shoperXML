@@ -92,38 +92,113 @@ if price_from > price_to:
 # Szukaj po nazwie
 name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
 
-# --- Filtry zaawansowane (zwinięte): STAN ---
-stan_col = None
-for cand in ["Stan", "stan", "stan_1", "stan_2"]:
-    if cand in df.columns:
-        stan_col = cand
-        break
-
-with st.sidebar.expander("Filtry zaawansowane – Stan", expanded=False):
-    stan_values_selected = None
-    if stan_col is not None:
-        stan_series_raw = df[stan_col].dropna().astype(str).str.strip()
-        # Wyświetlaj wartości jak w danych; do porównań użyj znormalizowanych
-        stan_series_norm = stan_series_raw.str.casefold()
-        unique_raw = stan_series_raw.unique().tolist()
-        # sortuj alfabetycznie wg wyświetlanej wartości
-        unique_raw_sorted = sorted(unique_raw, key=lambda x: str(x).lower())
-        # decyzja o rodzaju kontrolki
-        if len(unique_raw_sorted) <= 6:
-            stan_choice = st.radio(
-                f"{stan_col}",
-                options=["(Wszystkie)"] + unique_raw_sorted,
-                index=0,
-            )
-            if stan_choice != "(Wszystkie)":
-                stan_values_selected = [stan_choice]
+# --- Filtry zaawansowane (zwinięte) ---
+with st.sidebar.expander("Filtry zaawansowane", expanded=False):
+    # 1) Stan (TYLKO kolumna dokładnie 'Stan', zakres liczbowy)
+    stan_range = None
+    if "Stan" in df.columns:
+        stan_num = pd.to_numeric(df["Stan"], errors="coerce")
+        if stan_num.notna().any():
+            stan_min = float(stan_num.min())
+            stan_max = float(stan_num.max())
+            c1, c2 = st.columns(2)
+            with c1:
+                stan_from = st.number_input("Stan od", value=stan_min, min_value=0.0, step=1.0, format="%.0f")
+            with c2:
+                stan_to = st.number_input("Stan do", value=stan_max, min_value=0.0, step=1.0, format="%.0f")
+            if stan_from > stan_to:
+                st.warning("'Stan od' nie może być większa niż 'Stan do'.")
+            else:
+                stan_range = (stan_from, stan_to)
         else:
-            stan_values_selected = st.multiselect(
-                f"{stan_col}", options=unique_raw_sorted, default=[],
-                help="Pozostaw puste, aby nie filtrować po tej kolumnie."
-            )
+            st.caption("Kolumna 'Stan' nie zawiera wartości liczbowych – filtr zakresu pominięty.")
     else:
-        st.caption("Brak kolumny 'Stan' – pomijam filtr.")
+        st.caption("Brak kolumny 'Stan'.")
+
+    # 2) ekran_dotykowy (wartości z tabeli)
+    ekr_sel = None
+    if "ekran_dotykowy" in df.columns:
+        ekr_vals = df["ekran_dotykowy"].dropna().astype(str).str.strip()
+        ekr_opts = sorted(ekr_vals.unique().tolist(), key=lambda x: str(x).lower())
+        if len(ekr_opts) <= 3:
+            ekr_choice = st.radio("ekran_dotykowy", options=["(Wszystkie)"] + ekr_opts, index=0)
+            ekr_sel = [] if ekr_choice == "(Wszystkie)" else [ekr_choice]
+        else:
+            ekr_sel = st.multiselect("ekran_dotykowy", options=ekr_opts, default=[])
+
+    # 3) ilosc_rdzeni (zakres liczbowy)
+    rdzenie_range = None
+    if "ilosc_rdzeni" in df.columns:
+        rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
+        if rdz.notna().any():
+            rmin, rmax = int(rdz.min()), int(rdz.max())
+            c1, c2 = st.columns(2)
+            with c1:
+                rd_from = st.number_input("Rdzenie od", value=float(rmin), min_value=0.0, step=1.0, format="%.0f")
+            with c2:
+                rd_to = st.number_input("Rdzenie do", value=float(rmax), min_value=0.0, step=1.0, format="%.0f")
+            if rd_from <= rd_to:
+                rdzenie_range = (int(rd_from), int(rd_to))
+            else:
+                st.warning("'Rdzenie od' > 'Rdzenie do'.")
+
+    # 4) kondycja_sprzetu (multiselect)
+    kond_sel = None
+    if "kondycja_sprzetu" in df.columns:
+        v = df["kondycja_sprzetu"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        kond_sel = st.multiselect("kondycja_sprzetu", options=opts, default=[])
+
+    # 5) procesor (multiselect z tabeli)
+    proc_sel = None
+    if "procesor" in df.columns:
+        v = df["procesor"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        proc_sel = st.multiselect("procesor", options=opts, default=[])
+
+    # 6) przekatna_ekranu (zakres float)
+    przek_range = None
+    if "przekatna_ekranu" in df.columns:
+        pe = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
+        if pe.notna().any():
+            pmin, pmax = float(pe.min()), float(pe.max())
+            c1, c2 = st.columns(2)
+            with c1:
+                p_from = st.number_input("Przekątna od", value=pmin, min_value=0.0, step=0.1, format="%.1f")
+            with c2:
+                p_to = st.number_input("Przekątna do", value=pmax, min_value=0.0, step=0.1, format="%.1f")
+            if p_from <= p_to:
+                przek_range = (p_from, p_to)
+            else:
+                st.warning("'Przekątna od' > 'Przekątna do'.")
+
+    # 7) rodzaj_karty_graficznej (multiselect)
+    rodz_gpu_sel = None
+    if "rodzaj_karty_graficznej" in df.columns:
+        v = df["rodzaj_karty_graficznej"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        rodz_gpu_sel = st.multiselect("rodzaj_karty_graficznej", options=opts, default=[])
+
+    # 8) rozdzielczosc_ekranu (multiselect)
+    rozdz_sel = None
+    if "rozdzielczosc_ekranu" in df.columns:
+        v = df["rozdzielczosc_ekranu"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        rozdz_sel = st.multiselect("rozdzielczosc_ekranu", options=opts, default=[])
+
+    # 9) stan_obudowy (multiselect)
+    stan_ob_sel = None
+    if "stan_obudowy" in df.columns:
+        v = df["stan_obudowy"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        stan_ob_sel = st.multiselect("stan_obudowy", options=opts, default=[])
+
+    # 10) typ_pamieci_ram (multiselect)
+    typ_ram_sel = None
+    if "typ_pamieci_ram" in df.columns:
+        v = df["typ_pamieci_ram"].dropna().astype(str).str.strip()
+        opts = sorted(v.unique().tolist(), key=lambda x: str(x).lower())
+        typ_ram_sel = st.multiselect("typ_pamieci_ram", options=opts, default=[])
 
 # ---------- Filtrowanie ----------
 mask = pd.Series(True, index=df.index)
@@ -154,12 +229,62 @@ if price.notna().any():
 if name_query.strip():
     mask &= name_series_orig.str.contains(name_query.strip(), case=False, na=False)
 
-# Stan (z expander)
-if 'stan_col' in locals() and stan_col is not None and 'stan_values_selected' in locals() and stan_values_selected:
-    # porównanie na wersjach znormalizowanych
-    stan_series_cmp = df[stan_col].astype(str).str.strip().str.casefold()
-    selected_norm = pd.Series(stan_values_selected).astype(str).str.strip().str.casefold().tolist()
-    mask &= stan_series_cmp.isin(selected_norm)
+# Stan (zakres liczbowy)
+if 'stan_range' in locals() and stan_range is not None and "Stan" in df.columns:
+    stan_num_all = pd.to_numeric(df["Stan"], errors="coerce")
+    mask &= stan_num_all.between(stan_range[0], stan_range[1], inclusive="both")
+
+# ekran_dotykowy
+if 'ekr_sel' in locals() and ekr_sel:
+    cmp = df["ekran_dotykowy"].astype(str).str.strip().str.casefold()
+    target = pd.Series(ekr_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# ilosc_rdzeni
+if 'rdzenie_range' in locals() and rdzenie_range is not None and "ilosc_rdzeni" in df.columns:
+    r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce")
+    mask &= r_all.between(rdzenie_range[0], rdzenie_range[1], inclusive="both")
+
+# kondycja_sprzetu
+if 'kond_sel' in locals() and kond_sel:
+    cmp = df["kondycja_sprzetu"].astype(str).str.strip().str.casefold()
+    target = pd.Series(kond_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# procesor
+if 'proc_sel' in locals() and proc_sel:
+    cmp = df["procesor"].astype(str).str.strip().str.casefold()
+    target = pd.Series(proc_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# przekatna_ekranu
+if 'przek_range' in locals() and przek_range is not None and "przekatna_ekranu" in df.columns:
+    p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
+    mask &= p_all.between(przek_range[0], przek_range[1], inclusive="both")
+
+# rodzaj_karty_graficznej
+if 'rodz_gpu_sel' in locals() and rodz_gpu_sel:
+    cmp = df["rodzaj_karty_graficznej"].astype(str).str.strip().str.casefold()
+    target = pd.Series(rodz_gpu_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# rozdzielczosc_ekranu
+if 'rozd_sel' in locals() and rozdz_sel:
+    cmp = df["rozdzielczosc_ekranu"].astype(str).str.strip().str.casefold()
+    target = pd.Series(rozd_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# stan_obudowy
+if 'stan_ob_sel' in locals() and stan_ob_sel:
+    cmp = df["stan_obudowy"].astype(str).str.strip().str.casefold()
+    target = pd.Series(stan_ob_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
+
+# typ_pamieci_ram
+if 'typ_ram_sel' in locals() and typ_ram_sel:
+    cmp = df["typ_pamieci_ram"].astype(str).str.strip().str.casefold()
+    target = pd.Series(typ_ram_sel).astype(str).str.strip().str.casefold().tolist()
+    mask &= cmp.isin(target)
 
 filtered = df.loc[mask].copy()
 
