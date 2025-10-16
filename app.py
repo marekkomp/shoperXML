@@ -70,7 +70,7 @@ status_choice = st.sidebar.radio(
     index=1,
 )
 
-# Kategoria – bez wyboru kolumny, z unikalnych wartości
+# Kategoria – z unikalnych wartości (wiemy, która kolumna)
 cats_options = sorted(cat_series_orig.unique().tolist())
 selected_cats = st.sidebar.multiselect("Kategoria", options=cats_options)
 
@@ -91,6 +91,39 @@ if price_from > price_to:
 
 # Szukaj po nazwie
 name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
+
+# --- Filtry zaawansowane (zwinięte): STAN ---
+stan_col = None
+for cand in ["Stan", "stan", "stan_1", "stan_2"]:
+    if cand in df.columns:
+        stan_col = cand
+        break
+
+with st.sidebar.expander("Filtry zaawansowane – Stan", expanded=False):
+    stan_values_selected = None
+    if stan_col is not None:
+        stan_series_raw = df[stan_col].dropna().astype(str).str.strip()
+        # Wyświetlaj wartości jak w danych; do porównań użyj znormalizowanych
+        stan_series_norm = stan_series_raw.str.casefold()
+        unique_raw = stan_series_raw.unique().tolist()
+        # sortuj alfabetycznie wg wyświetlanej wartości
+        unique_raw_sorted = sorted(unique_raw, key=lambda x: str(x).lower())
+        # decyzja o rodzaju kontrolki
+        if len(unique_raw_sorted) <= 6:
+            stan_choice = st.radio(
+                f"{stan_col}",
+                options=["(Wszystkie)"] + unique_raw_sorted,
+                index=0,
+            )
+            if stan_choice != "(Wszystkie)":
+                stan_values_selected = [stan_choice]
+        else:
+            stan_values_selected = st.multiselect(
+                f"{stan_col}", options=unique_raw_sorted, default=[],
+                help="Pozostaw puste, aby nie filtrować po tej kolumnie."
+            )
+    else:
+        st.caption("Brak kolumny 'Stan' – pomijam filtr.")
 
 # ---------- Filtrowanie ----------
 mask = pd.Series(True, index=df.index)
@@ -120,6 +153,13 @@ if price.notna().any():
 # Nazwa (substring, case-insensitive)
 if name_query.strip():
     mask &= name_series_orig.str.contains(name_query.strip(), case=False, na=False)
+
+# Stan (z expander)
+if 'stan_col' in locals() and stan_col is not None and 'stan_values_selected' in locals() and stan_values_selected:
+    # porównanie na wersjach znormalizowanych
+    stan_series_cmp = df[stan_col].astype(str).str.strip().str.casefold()
+    selected_norm = pd.Series(stan_values_selected).astype(str).str.strip().str.casefold().tolist()
+    mask &= stan_series_cmp.isin(selected_norm)
 
 filtered = df.loc[mask].copy()
 
