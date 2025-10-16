@@ -3,9 +3,9 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Filtr parametrów wg kategorii / aktywności", layout="wide")
-st.title("⚙️ Filtr parametrów wg kategorii / aktywności")
-st.caption("Wgraj CSV/XLSX → wybierz kolumnę z kategorią oraz status wg 'Dostępność' → opcjonalnie producent i fraza w nazwie → zobacz pasujące pozycje. Dodatkowo możesz wyświetlać tylko kolumny niepuste.")
+st.set_page_config(page_title="Filtr ofert – kategoria / producent / status / cena / nazwa", layout="wide")
+st.title("⚙️ Filtr ofert – kategoria / producent / status / cena / nazwa")
+st.caption("Wgraj CSV/XLSX → wybierz status (Dostępność), kategorię, producenta, zakres cen i/lub frazę w nazwie. Widok zawsze pokazuje tylko kolumny niepuste dla wyniku.")
 
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
@@ -13,7 +13,7 @@ def read_any_table(file) -> pd.DataFrame:
     name = file.name.lower()
     if name.endswith((".xlsx", ".xlsm", ".xls")):
         return pd.read_excel(file)
-    # CSV/TSV — spróbuj autodetekcji separatora
+    # CSV/TSV — autodetekcja separatora
     try:
         df = pd.read_csv(file, sep=None, engine="python")
     except Exception:
@@ -43,121 +43,92 @@ if df.empty:
 
 st.success(f"Wczytano: {upload.name} • Wiersze: {len(df):,} • Kolumny: {len(df.columns):,}")
 
-# ---------- Sidebar: konfiguracja ----------
-st.sidebar.header("Ustawienia")
+# ---------- Kolumny wymagane ----------
+missing = [c for c in ["Kategoria", "Producent", "Nazwa", "Cena", "Dostępność"] if c not in df.columns]
+if missing:
+    st.error(f"Brak wymaganych kolumn: {', '.join(missing)}")
+    st.stop()
 
-# Kolumna z kategorią
-col_category = st.sidebar.selectbox(
-    "Kolumna z kategorią (np. 'Kategoria' / 'Category')",
-    options=df.columns.tolist(),
-    index=next((i for i, c in enumerate(df.columns) if c.lower() in {"kategoria", "category", "kategoria allegro"}), 0)
-)
+# Normalizacja pomocnicza (bez kontrolek – zawsze aktywna)
+cat_series_orig = df["Kategoria"].astype(str).str.strip()
+prod_series_orig = df["Producent"].astype(str).str.strip()
+name_series_orig = df["Nazwa"].astype(str)
 
-# Tryb dopasowań / normalizacja
-st.sidebar.subheader("Tryb dopasowania")
-normalize_case = st.sidebar.checkbox("Ignoruj wielkość liter / spacje (trim)", value=True)
-cat_contains = st.sidebar.checkbox("Kategoria: dopasuj 'zawiera' (nie tylko równe)", value=False)
-prod_contains = st.sidebar.checkbox("Producent: dopasuj 'zawiera' (nie tylko równe)", value=False)
+cat_series_norm = cat_series_orig.str.casefold()
+prod_series_norm = prod_series_orig.str.casefold()
 
-# Status wg kolumny DOSTĘPNOŚĆ (1 aktywny, 99 nieaktywny)
-status_filter = st.sidebar.radio(
+# Cena na float (kropka w danych)
+price = pd.to_numeric(df["Cena"], errors="coerce")
+
+# ---------- Sidebar: filtry ----------
+st.sidebar.header("Ustawienia filtrowania")
+
+# Status wg Dostępność: 1 aktywny, 99 nieaktywny
+status_choice = st.sidebar.radio(
     "Status produktu (kolumna 'Dostępność')",
     options=["Wszystkie", "Aktywne (1)", "Nieaktywne (99)"],
     index=1,
-    help="Aktywne → Dostępność == 1, Nieaktywne → Dostępność == 99"
 )
 
-# Listy wartości dla filtrów
-base_cats = df[col_category].dropna().astype(str).str.strip()
-if normalize_case:
-    base_cats = base_cats.str.casefold()
-
-cats_unique = sorted(base_cats.unique().tolist())
-selected_cats = st.sidebar.multiselect(
-    "Filtr kategorii (pozostaw puste = wszystkie)",
-    options=cats_unique,
-    help="Np. wybierz 'laptopy'. Możesz też włączyć dopasowanie 'zawiera'."
-)
+# Kategoria – bez wyboru kolumny, z unikalnych wartości
+cats_options = sorted(cat_series_orig.unique().tolist())
+selected_cats = st.sidebar.multiselect("Kategoria", options=cats_options)
 
 # Producent
-producer_filter_values = None
-producer_series = None
-if "Producent" in df.columns:
-    producer_series = df["Producent"].dropna().astype(str).str.strip()
-    if normalize_case:
-        producer_series = producer_series.str.casefold()
-    producers = sorted(producer_series.unique().tolist())
-    producer_filter_values = st.sidebar.multiselect("Filtr Producent (opcjonalnie)", options=producers)
+prod_options = sorted(prod_series_orig.unique().tolist())
+selected_prods = st.sidebar.multiselect("Producent", options=prod_options)
 
-# Szukaj w nazwie
-name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="", help="Fragment nazwy, bez rozróżniania wielkości liter")
-
-# ---------- Filtrowanie wierszy ----------
-mask = pd.Series(True, index=df.index)
-
-# Kategoria
-if selected_cats:
-    cat_series = df[col_category].astype(str).str.strip()
-    if normalize_case:
-        cat_series = cat_series.str.casefold()
-    if cat_contains:
-        m = pd.Series(False, index=df.index)
-        for val in selected_cats:
-            m |= cat_series.str.contains(str(val), na=False)
-        mask &= m
-    else:
-        mask &= cat_series.isin(selected_cats)
-
-# Producent
-if producer_filter_values is not None and len(producer_filter_values) > 0 and producer_series is not None:
-    prod_series_full = df["Producent"].astype(str).str.strip()
-    series_cmp = prod_series_full.str.casefold() if normalize_case else prod_series_full
-    if prod_contains:
-        m = pd.Series(False, index=df.index)
-        for val in producer_filter_values:
-            m |= series_cmp.str.contains(str(val), na=False)
-        mask &= m
-    else:
-        mask &= series_cmp.isin(producer_filter_values)
-
-# Status wg 'Dostępność'
-if "Dostępność" in df.columns and status_filter != "Wszystkie":
-    dost = pd.to_numeric(df["Dostępność"], errors="coerce")
-    if "Aktywne" in status_filter:
-        mask &= (dost == 1)
-    elif "Nieaktywne" in status_filter:
-        mask &= (dost == 99)
+# Zakres cen (od–do)
+min_price = float(pd.Series(price).min(skipna=True)) if price.notna().any() else 0.0
+max_price = float(pd.Series(price).max(skipna=True)) if price.notna().any() else 0.0
+c1, c2 = st.sidebar.columns(2)
+with c1:
+    price_from = st.number_input("Cena od", value=min_price, min_value=0.0, step=1.0, format="%.2f")
+with c2:
+    price_to = st.number_input("Cena do", value=max_price, min_value=0.0, step=1.0, format="%.2f")
+if price_from > price_to:
+    st.sidebar.warning("'Cena od' nie może być większa niż 'Cena do'.")
 
 # Szukaj po nazwie
-if name_query.strip() and "Nazwa" in df.columns:
-    names = df["Nazwa"].astype(str)
-    mask &= names.str.contains(name_query.strip(), case=False, na=False)
+name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
+
+# ---------- Filtrowanie ----------
+mask = pd.Series(True, index=df.index)
+
+# Status
+if status_choice != "Wszystkie":
+    d = pd.to_numeric(df["Dostępność"], errors="coerce")
+    if "Aktywne" in status_choice:
+        mask &= (d == 1)
+    else:
+        mask &= (d == 99)
+
+# Kategoria (normalizacja case/trim w porównaniu)
+if selected_cats:
+    selected_norm = pd.Series(selected_cats).astype(str).str.strip().str.casefold().tolist()
+    mask &= cat_series_norm.isin(selected_norm)
+
+# Producent
+if selected_prods:
+    selected_p_norm = pd.Series(selected_prods).astype(str).str.strip().str.casefold().tolist()
+    mask &= prod_series_norm.isin(selected_p_norm)
+
+# Cena
+if price.notna().any():
+    mask &= price.between(price_from, price_to, inclusive="both")
+
+# Nazwa (substring, case-insensitive)
+if name_query.strip():
+    mask &= name_series_orig.str.contains(name_query.strip(), case=False, na=False)
 
 filtered = df.loc[mask].copy()
 
-# ---------- Diagnostyka ----------
-with st.expander("🔎 Diagnostyka filtrów"):
-    st.write({
-        "wybrane_kategorie": selected_cats,
-        "producent_wybrane": producer_filter_values,
-        "status": status_filter,
-        "zapytanie_nazwa": name_query,
-        "pozostalo_wierszy": int(len(filtered)),
-    })
-    st.write("Przykładowe wartości kolumn:")
-    st.write({
-        "Kategoria_top10": df[col_category].dropna().astype(str).str.strip().unique()[:10],
-        "Producent_top10": (df["Producent"].dropna().astype(str).str.strip().unique()[:10] if "Producent" in df.columns else []),
-        "Dostepnosc_top10": (pd.to_numeric(df["Dostępność"], errors="coerce").dropna().unique()[:10] if "Dostępność" in df.columns else []),
-    })
-
+# ---------- Wynik i widok (zawsze tylko kolumny niepuste) ----------
 if filtered.empty:
     st.warning("Brak wierszy po zastosowaniu filtrów.")
-    st.info("Spróbuj: wyłączyć filtr Producent, sprawdzić dokładne brzmienie kategorii (włącz 'zawiera'), lub zmienić status Aktywne/Nieaktywne.")
     st.stop()
 
-# ---------- Kolumny niepuste i widok ----------
-# Definicja "puste": NaN lub pusty string po trimie
+# Lista kolumn z co najmniej jedną niepustą wartością
 non_empty_cols = []
 for c in filtered.columns:
     s = filtered[c]
@@ -165,54 +136,32 @@ for c in filtered.columns:
     if has_value.any():
         non_empty_cols.append(c)
 
-preferred_cols = [
-    "ID","Nazwa","SKU","EAN","Producent","Kategoria","Cena","Dostępność","Stan","URL"
-]
-available_defaults = [c for c in preferred_cols if c in filtered.columns and c in non_empty_cols]
+view_df = filtered[non_empty_cols]
 
 st.subheader("Wynik")
-show_only_nonempty = st.checkbox("Pokaż tylko kolumny niepuste", value=True)
-cols_source = non_empty_cols if show_only_nonempty else filtered.columns.tolist()
-
-selected_cols_show = st.multiselect(
-    "Kolumny do pokazania",
-    options=cols_source,
-    default=available_defaults if available_defaults else cols_source[:min(25, len(cols_source))]
-)
-
-view_df = filtered[selected_cols_show] if selected_cols_show else filtered[cols_source]
-
-st.write(f"Wiersze: **{len(view_df):,}** | Kolumny widoczne: **{len(view_df.columns):,}**")
+st.write(f"Wiersze: **{len(view_df):,}** | Kolumny (niepuste): **{len(view_df.columns):,}** / {len(df.columns):,}")
 st.dataframe(view_df, use_container_width=True, height=560)
 
 # ---------- Pobieranie ----------
 st.divider()
 st.subheader("Pobierz wynik")
 
-c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
 with c1:
     csv_bytes = view_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        label="⬇️ CSV – widok (bieżące kolumny)",
+        label="⬇️ CSV – widok (kolumny niepuste)",
         data=csv_bytes,
-        file_name="oferty_widok.csv",
+        file_name="oferty_widok_niepuste.csv",
         mime="text/csv",
     )
 with c2:
     xlsx_bytes = to_excel_bytes(view_df)
     st.download_button(
-        label="⬇️ XLSX – widok (bieżące kolumny)",
+        label="⬇️ XLSX – widok (kolumny niepuste)",
         data=xlsx_bytes,
-        file_name="oferty_widok.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-with c3:
-    xlsx_full = to_excel_bytes(filtered)
-    st.download_button(
-        label="⬇️ XLSX – pełne kolumny (po filtrach)",
-        data=xlsx_full,
-        file_name="oferty_pelne_po_filtrach.xlsx",
+        file_name="oferty_widok_niepuste.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-st.caption("Aplikacja nie modyfikuje oryginalnego pliku. Wszystkie wcięcia w kodzie to spacje (4) – bez tabulatorów.")
+st.caption("Normalizacja (trim + case-insensitive) jest zawsze aktywna. Widok ukrywa kolumny bez wartości w aktualnym wyniku.")
