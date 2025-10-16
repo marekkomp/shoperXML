@@ -48,12 +48,15 @@ if missing:
     st.error(f"Brak wymaganych kolumn: {', '.join(missing)}")
     st.stop()
 
-# Normalizacja pomocnicza
-df_cols = {c.lower(): c for c in df.columns}
-cat_series = df[df_cols.get("kategoria", "Kategoria")].astype(str).str.strip()
-prod_series = df[df_cols.get("producent", "Producent")].astype(str).str.strip()
-name_series = df[df_cols.get("nazwa", "Nazwa")].astype(str)
-price = pd.to_numeric(df[df_cols.get("cena", "Cena")], errors="coerce")
+# Normalizacja pomocnicza (bez mapowania nazw – używamy dokładnych kolumn)
+cat_series = df["Kategoria"].astype(str).str.strip()
+prod_series = df["Producent"].astype(str).str.strip()
+name_series = df["Nazwa"].astype(str)
+price = pd.to_numeric(df["Cena"], errors="coerce")
+
+# Usuń NaN z list wyboru (żeby nie pojawiało się 'nan')
+cat_options_base = df["Kategoria"].dropna().astype(str).str.strip()
+prod_options_base = df["Producent"].dropna().astype(str).str.strip()
 
 # ---------- Sidebar: filtry główne ----------
 st.sidebar.header("Ustawienia filtrowania")
@@ -64,10 +67,10 @@ status_choice = st.sidebar.radio(
     index=1,
 )
 
-cats_options = sorted(cat_series.unique().tolist())
+cats_options = sorted(cat_options_base.unique().tolist())
 selected_cats = st.sidebar.multiselect("Kategoria", options=cats_options)
 
-prod_options = sorted(prod_series.unique().tolist())
+prod_options = sorted(prod_options_base.unique().tolist())
 selected_prods = st.sidebar.multiselect("Producent", options=prod_options)
 
 min_price = float(price.min(skipna=True)) if price.notna().any() else 0.0
