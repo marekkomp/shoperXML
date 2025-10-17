@@ -27,20 +27,50 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, index=False, sheet_name="dane")
     return output.getvalue()
 
-# ---------- Upload ----------
-upload = st.file_uploader("Wgraj plik z ofertami (CSV lub XLSX)", type=["csv", "xlsx", "xls", "xlsm"])
-if not upload:
-    st.info("Wgraj plik, aby kontynuować.")
-    st.stop()
+# ---------- Upload lub pobranie na żądanie ----------
+st.sidebar.subheader("Wczytaj dane")
+slug = st.sidebar.text_input("Nazwa źródła (ostatni fragment URL)", value="", placeholder="np. 1234")
+fetch_clicked = st.sidebar.button("Pobierz plik z URL")
 
-with st.spinner("Wczytywanie pliku..."):
-    df = read_any_table(upload)
+df = None
+source_label = None
+
+if fetch_clicked:
+    if not slug.strip():
+        st.sidebar.error("Podaj nazwę źródła (slug).")
+    else:
+        full_url = "https://kompre.esolu-hub.pl/api/feed/" + slug.strip()
+        with st.spinner("Pobieranie CSV z URL..."):
+            try:
+                # tylko na żądanie; bez automatu i bez TTL
+                df_url = pd.read_csv(full_url, sep=None, engine="python")
+                # trzymaj w sesji, by nie znikało po każdym rerunie
+                st.session_state["df_from_url"] = df_url
+                st.session_state["df_source_label"] = f"URL:{slug.strip()}"
+            except Exception as e:
+                st.sidebar.error("Nie udało się pobrać pliku (sprawdź slug).")
+                st.stop()
+
+# priorytet: upload ręczny > dane z URL (jeśli są)
+upload = st.file_uploader("Wgraj plik z ofertami (CSV lub XLSX)", type=["csv", "xlsx", "xls", "xlsm"])
+
+if upload is not None:
+    with st.spinner("Wczytywanie pliku..."):
+        df = read_any_table(upload)
+    source_label = upload.name
+elif "df_from_url" in st.session_state:
+    df = st.session_state["df_from_url"]
+    source_label = st.session_state.get("df_source_label", "URL")
+
+if df is None:
+    st.info("Wgraj plik albo podaj slug i kliknij „Pobierz plik z URL”.")
+    st.stop()
 
 if df.empty:
     st.error("Plik został wczytany, ale tabela jest pusta.")
     st.stop()
 
-st.success(f"Wczytano: {upload.name} • Wiersze: {len(df):,} • Kolumny: {len(df.columns):,}")
+st.success(f"Wczytano: {source_label} • Wiersze: {len(df):,} • Kolumny: {len(df.columns):,}")
 
 # ---------- Kolumny wymagane ----------
 missing = [c for c in ["Kategoria", "Producent", "Nazwa", "Cena", "Dostępność"] if c not in df.columns]
