@@ -93,7 +93,7 @@ st.sidebar.header("Ustawienia filtrowania")
 
 status_choice = st.sidebar.radio(
     "Status produktu (kolumna 'Dostępność')",
-    options=["Wszystkie", "Aktywne (1)", "Nieaktywne (99)"],
+    options=["Wszystkie", "Aktywne", "Nieaktywne"],
     index=1,
 )
 
