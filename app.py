@@ -27,6 +27,60 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, index=False, sheet_name="dane")
     return output.getvalue()
 
+# ---------- Normalizacja nagłówków CSV z API/plików ----------
+def normalize_csv_headers(df: pd.DataFrame) -> pd.DataFrame:
+    COLMAP = {
+        # wymagane
+        "Tytuł oferty": "Nazwa",
+        "Cena PL": "Cena",
+        "Marka": "Producent",
+        "Status oferty": "Dostępność",
+
+        # opcjonalne/zaawansowane
+        "Ekran dotykowy": "ekran_dotykowy",
+        "Liczba rdzeni": "ilosc_rdzeni",
+        "Liczba rdzeni procesora": "ilosc_rdzeni",
+        "Rodzaj karty graficznej": "rodzaj_karty_graficznej",
+        "Rozdzielczość (px)": "rozdzielczosc_ekranu",
+        "Rozdzielczość": "rozdzielczosc_ekranu",
+        "Stan obudowy": "stan_obudowy",
+        "Typ pamięci RAM": "typ_pamieci_ram",
+        "Przekątna ekranu": "przekatna_ekranu",
+        "Procesor": "procesor",
+        "Kondycja sprzętu": "kondycja_sprzetu",
+
+        # zostaw bez zmian jeśli już są
+        "Stan": "Stan",
+        "Liczba sztuk": "Liczba sztuk",
+        "Kategoria": "Kategoria",
+        "Producent": "Producent",
+        "Nazwa": "Nazwa",
+        "Cena": "Cena",
+        "Dostępność": "Dostępność",
+    }
+
+    rename_map = {src: dst for src, dst in COLMAP.items() if src in df.columns and src != COLMAP.get(src)}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    # typy liczbowe
+    for col in ["Cena", "Dostępność", "Stan", "Liczba sztuk"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "przekatna_ekranu" in df.columns:
+        df["przekatna_ekranu"] = (
+            df["przekatna_ekranu"].astype(str)
+            .str.replace('"', '')
+            .str.replace(",", ".", regex=False)
+        )
+        df["przekatna_ekranu"] = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
+
+    if "ilosc_rdzeni" in df.columns:
+        df["ilosc_rdzeni"] = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
+
+    return df
+
 @st.cache_data(show_spinner=False)
 def read_xml_build_df(url: str) -> pd.DataFrame:
     import xml.etree.ElementTree as ET
@@ -36,7 +90,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
     root = ET.fromstring(raw)
 
     rows = []
-    max_imgs = 0  # policzymy, ile maksymalnie zdjęć ma rekord
+    max_imgs = 0  # ile maksymalnie zdjęć ma rekord
 
     for o in root.findall(".//o"):
         oid   = (o.get("id") or "").strip()
@@ -47,7 +101,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         cat   = (o.findtext("cat")  or "").strip()
         name  = (o.findtext("name") or "").strip()
 
-        # --- Opis HTML ---
+        # --- Opis HTML (zachowaj tagi) ---
         desc_html = ""
         desc_el = o.find("desc")
         if desc_el is not None:
@@ -57,7 +111,6 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             ).strip() or (desc_el.text or "").strip()
 
         # --- Zdjęcia ---
-        main_img = ""
         images = []
         imgs_el = o.find("imgs")
         if imgs_el is not None:
@@ -100,11 +153,11 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             "Opis HTML": desc_html,
         }
 
-        # dodaj zdjęcia jako osobne kolumny
+        # zdjęcia jako osobne kolumny
         for i, img in enumerate(images):
             row[f"Zdjęcie {i+1}"] = img
 
-        # dodatkowe atrybuty z <attrs>
+        # pozostałe atrybuty z <attrs> jako kolumny
         for k, v in extra.items():
             if k not in row:
                 row[k] = v
@@ -113,7 +166,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    # brakujące kolumny zdjęć — ujednolicenie
+    # ujednolicenie liczby kolumn zdjęć
     for i in range(1, max_imgs + 1):
         col = f"Zdjęcie {i}"
         if col not in df.columns:
@@ -164,7 +217,7 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
     with c2:
         price_to = st.number_input("Cena do", value=max_price, min_value=0.0, step=1.0, format="%.2f")
 
-    # Stan liczbowy (jeśli istnieje)
+    # Stan (jeśli istnieje)
     stan_range = None
     if "Stan" in df.columns:
         stan_num = pd.to_numeric(df["Stan"], errors="coerce")
@@ -319,6 +372,7 @@ def run_csv_mode():
         with st.spinner("Pobieranie CSV..."):
             try:
                 df_url = pd.read_csv(url, sep=None, engine="python")
+                df_url = normalize_csv_headers(df_url)
                 st.session_state["df_csv"] = df_url
             except Exception:
                 st.sidebar.error("Nie udało się pobrać CSV (zły slug/hasło lub brak pliku).")
@@ -327,6 +381,7 @@ def run_csv_mode():
     if upload is not None:
         with st.spinner("Wczytywanie pliku..."):
             df = read_any_table(upload)
+            df = normalize_csv_headers(df)
         render_app(df, upload.name, show_advanced=True)
     elif "df_csv" in st.session_state:
         render_app(st.session_state["df_csv"], "URL:CSV", show_advanced=True)
@@ -337,7 +392,6 @@ def run_csv_mode():
 def run_xml_mode():
     st.sidebar.subheader("Tryb: XML")
 
-    # Użytkownik podaje wyłącznie klucz/nazwę pliku; my budujemy pełny URL
     base_url = "https://marekkomp.github.io/nowe_repo10.2025_allegrocsv_na_XML/output/"
     key = st.sidebar.text_input("Nazwa pliku XML (bez .xml)", value="", placeholder="np. nazwa_pliku")
     if st.sidebar.button("Pobierz XML"):
@@ -354,7 +408,6 @@ def run_xml_mode():
                 st.stop()
 
     if "df_xml" in st.session_state:
-        # show_advanced=False dla XML → brak filtrów zaawansowanych
         render_app(st.session_state["df_xml"], "URL:XML", show_advanced=False)
     else:
         st.info("Podaj nazwę pliku (bez .xml) i pobierz.")
