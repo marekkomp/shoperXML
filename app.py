@@ -36,6 +36,8 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
     root = ET.fromstring(raw)
 
     rows = []
+    max_imgs = 0  # policzymy, ile maksymalnie zdjęć ma rekord
+
     for o in root.findall(".//o"):
         oid   = (o.get("id") or "").strip()
         ourl  = (o.get("url") or "").strip()
@@ -45,19 +47,14 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         cat   = (o.findtext("cat")  or "").strip()
         name  = (o.findtext("name") or "").strip()
 
-        # --- Opis HTML (zachowaj tagi) ---
+        # --- Opis HTML ---
         desc_html = ""
         desc_el = o.find("desc")
         if desc_el is not None:
-            # zbuduj HTML z dzieci <desc> (unikamy owijającego <desc>)
             desc_html = "".join(
                 ET.tostring(child, encoding="unicode", method="xml")
                 for child in list(desc_el)
-            ).strip()
-            # jeśli <desc> miało tylko tekst (bez dzieci), weź tekst
-            if not desc_html:
-                # to będzie czysty tekst bez tagów, ale lepsze to niż pusto
-                desc_html = (desc_el.text or "").strip()
+            ).strip() or (desc_el.text or "").strip()
 
         # --- Zdjęcia ---
         main_img = ""
@@ -73,9 +70,11 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
                 u = (i_el.get("url") or "").strip()
                 if u:
                     images.append(u)
-        imgs_joined = ";".join(images) if images else ""
 
-        # Atrybuty z <attrs>
+        if len(images) > max_imgs:
+            max_imgs = len(images)
+
+        # --- Atrybuty ---
         producent = ""
         extra = {}
         attrs_el = o.find("attrs")
@@ -99,10 +98,13 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             "ID": oid,
             "URL": ourl,
             "Opis HTML": desc_html,
-            "Zdjęcie główne": main_img,
-            "Zdjęcia": imgs_joined,
         }
-        # dołącz pozostałe atrybuty jako kolumny
+
+        # dodaj zdjęcia jako osobne kolumny
+        for i, img in enumerate(images):
+            row[f"Zdjęcie {i+1}"] = img
+
+        # dodatkowe atrybuty z <attrs>
         for k, v in extra.items():
             if k not in row:
                 row[k] = v
@@ -110,9 +112,17 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         rows.append(row)
 
     df = pd.DataFrame(rows)
+
+    # brakujące kolumny zdjęć — ujednolicenie
+    for i in range(1, max_imgs + 1):
+        col = f"Zdjęcie {i}"
+        if col not in df.columns:
+            df[col] = ""
+
     for c in ("Cena","Dostępność","Liczba sztuk"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
     return df
 
 
