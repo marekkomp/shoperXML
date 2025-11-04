@@ -248,23 +248,31 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
     name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
 
     # --- Filtry zaawansowane (tylko w CSV) ---
-    if show_advanced:
-        with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=False):
+    # --- Filtry zaawansowane (tylko w CSV) ---
+if show_advanced:
+    enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane", value=False)
+    if enable_adv:
+        with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=True):
             ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
+            przek_range = None
+
             if "ekran_dotykowy" in df.columns:
                 opts = sorted(df["ekran_dotykowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                ekr_sel = st.multiselect("ekran_dotykowy", options=opts, default=[])
+                ekr_sel = st.multiselect("Ekran dotykowy", options=opts)
+
             if "ilosc_rdzeni" in df.columns:
                 rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").dropna().astype(int)
                 if not rdz.empty:
-                    rdzenie_sel = st.multiselect("ilosc_rdzeni", options=sorted(rdz.unique().tolist()), default=[])
+                    rdzenie_sel = st.multiselect("Liczba rdzeni", options=sorted(rdz.unique().tolist()))
+
             if "kondycja_sprzetu" in df.columns:
                 opts = sorted(df["kondycja_sprzetu"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                kond_sel = st.multiselect("kondycja_sprzetu", options=opts, default=[])
+                kond_sel = st.multiselect("Kondycja sprzętu", options=opts)
+
             if "procesor" in df.columns:
                 opts = sorted(df["procesor"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                proc_sel = st.multiselect("procesor", options=opts, default=[])
-            przek_range = None
+                proc_sel = st.multiselect("Procesor", options=opts)
+
             if "przekatna_ekranu" in df.columns:
                 pe = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
                 if pe.notna().any():
@@ -276,18 +284,27 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
                         p_to = st.number_input("Przekątna do", value=pmax, min_value=0.0, step=0.1, format="%.1f")
                     if p_from <= p_to:
                         przek_range = (p_from, p_to)
+
             if "rodzaj_karty_graficznej" in df.columns:
                 opts = sorted(df["rodzaj_karty_graficznej"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                rodz_gpu_sel = st.multiselect("rodzaj_karty_graficznej", options=opts, default=[])
+                rodz_gpu_sel = st.multiselect("Rodzaj karty graficznej", options=opts)
+
             if "rozdzielczosc_ekranu" in df.columns:
                 opts = sorted(df["rozdzielczosc_ekranu"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                rozdz_sel = st.multiselect("rozdzielczosc_ekranu", options=opts, default=[])
+                rozdz_sel = st.multiselect("Rozdzielczość ekranu", options=opts)
+
             if "stan_obudowy" in df.columns:
                 opts = sorted(df["stan_obudowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                stan_ob_sel = st.multiselect("stan_obudowy", options=opts, default=[])
+                stan_ob_sel = st.multiselect("Stan obudowy", options=opts)
+
             if "typ_pamieci_ram" in df.columns:
                 opts = sorted(df["typ_pamieci_ram"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                typ_ram_sel = st.multiselect("typ_pamieci_ram", options=opts, default=[])
+                typ_ram_sel = st.multiselect("Typ pamięci RAM", options=opts)
+    else:
+        # brak aktywnych filtrów
+        ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
+        przek_range = None
+
 
     # ---------- Filtrowanie ----------
     mask = pd.Series(True, index=df.index)
