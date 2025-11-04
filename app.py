@@ -45,6 +45,36 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         cat   = (o.findtext("cat")  or "").strip()
         name  = (o.findtext("name") or "").strip()
 
+        # --- Opis HTML (zachowaj tagi) ---
+        desc_html = ""
+        desc_el = o.find("desc")
+        if desc_el is not None:
+            # zbuduj HTML z dzieci <desc> (unikamy owijającego <desc>)
+            desc_html = "".join(
+                ET.tostring(child, encoding="unicode", method="xml")
+                for child in list(desc_el)
+            ).strip()
+            # jeśli <desc> miało tylko tekst (bez dzieci), weź tekst
+            if not desc_html:
+                # to będzie czysty tekst bez tagów, ale lepsze to niż pusto
+                desc_html = (desc_el.text or "").strip()
+
+        # --- Zdjęcia ---
+        main_img = ""
+        images = []
+        imgs_el = o.find("imgs")
+        if imgs_el is not None:
+            main_el = imgs_el.find("main")
+            if main_el is not None:
+                main_img = (main_el.get("url") or "").strip()
+                if main_img:
+                    images.append(main_img)
+            for i_el in imgs_el.findall("i"):
+                u = (i_el.get("url") or "").strip()
+                if u:
+                    images.append(u)
+        imgs_joined = ";".join(images) if images else ""
+
         # Atrybuty z <attrs>
         producent = ""
         extra = {}
@@ -68,8 +98,11 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             "Liczba sztuk": stock,
             "ID": oid,
             "URL": ourl,
+            "Opis HTML": desc_html,
+            "Zdjęcie główne": main_img,
+            "Zdjęcia": imgs_joined,
         }
-        # dołącz pozostałe atrybuty jako kolumny (bez mapowania filtrów zaawansowanych)
+        # dołącz pozostałe atrybuty jako kolumny
         for k, v in extra.items():
             if k not in row:
                 row[k] = v
@@ -81,6 +114,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
+
 
 # ---------- Wspólne UI (filtry + widok + export) ----------
 def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
