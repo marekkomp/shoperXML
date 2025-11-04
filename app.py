@@ -5,7 +5,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Filtr ofert – CSV/XLSX lub XML", layout="wide")
 st.title("⚙️ Filtr ofert – CSV/XLSX lub XML")
-st.caption("Wybierz tryb na górze. CSV/XLSX – pełne filtry (włączane przełącznikiem). XML – filtry podstawowe.")
+st.caption("Wybierz tryb na górze. CSV/XLSX – pełne filtry (włączane przełącznikiem). XML – filtry podstawowe lub automatyczne filtry zaawansowane z atrybutów.")
 
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
@@ -36,7 +36,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
     root = ET.fromstring(raw)
 
     rows = []
-    max_imgs = 0  # ile maksymalnie zdjęć ma rekord
+    max_imgs = 0  # maks liczba zdjęć
 
     for o in root.findall(".//o"):
         oid   = (o.get("id") or "").strip()
@@ -51,7 +51,6 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         desc_html = ""
         desc_el = o.find("desc")
         if desc_el is not None:
-            # bierzemy dzieci węzła, żeby utrzymać tagi
             desc_html = "".join(
                 ET.tostring(child, encoding="unicode", method="xml")
                 for child in list(desc_el)
@@ -99,11 +98,9 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             "Opis HTML": desc_html,
         }
 
-        # Zdjęcia jako osobne kolumny
         for i, img in enumerate(images):
             row[f"Zdjęcie {i+1}"] = img
 
-        # Dodatkowe atrybuty z <attrs>
         for k, v in extra.items():
             if k not in row:
                 row[k] = v
@@ -125,9 +122,67 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
     return df
 
+def _numeric_series(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce")
+
+def _is_probably_numeric(s: pd.Series, min_ratio: float = 0.6) -> bool:
+    sn = _numeric_series(s)
+    ratio = sn.notna().mean() if len(s) else 0.0
+    return ratio >= min_ratio
+
+def _auto_advanced_filters(df: pd.DataFrame, excluded_cols: set):
+    """
+    Generuje UI i zwraca maskę na podstawie automatycznych filtrów:
+    - dla kolumn liczbowych: zakres
+    - dla tekstowych/kateg.: multiselect (jeśli liczba unikalnych <= 100)
+    """
+    mask = pd.Series(True, index=df.index)
+    enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane (XML)", value=False)
+    if not enable_adv:
+        return mask
+
+    with st.sidebar.expander("Filtry zaawansowane (XML – z atrybutów)", expanded=True):
+        for col in [c for c in df.columns if c not in excluded_cols]:
+            series = df[col]
+            # Pomiń kolumny całkiem puste
+            if not (series.astype(str).str.strip() != "").any():
+                continue
+
+            # Zbyt duża liczba kategorii -> pomiń (by nie zamulać UI)
+            uniques = series.dropna().astype(str).str.strip().unique()
+            if _is_probably_numeric(series):
+                sn = _numeric_series(series)
+                if sn.notna().any():
+                    mn, mx = float(sn.min()), float(sn.max())
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        v_from = st.number_input(f"{col} od", value=mn, step=1.0, format="%.2f", key=f"{col}_from")
+                    with c2:
+                        v_to = st.number_input(f"{col} do", value=mx, step=1.0, format="%.2f", key=f"{col}_to")
+                    if v_from <= v_to:
+                        mask &= sn.between(v_from, v_to, inclusive="both")
+            else:
+                # Tekst/kategoria
+                # Przytnij do rozsądnej liczby opcji
+                if len(uniques) == 0:
+                    continue
+                if len(uniques) > 100:
+                    # Zbyt dużo – oferuj pole tekstowe „zawiera”
+                    query = st.text_input(f"{col} zawiera", value="", key=f"{col}_contains")
+                    if query.strip():
+                        cmp = series.astype(str).str.contains(query.strip(), case=False, na=False)
+                        mask &= cmp
+                else:
+                    opts = sorted([str(u) for u in uniques], key=str.lower)
+                    sel = st.multiselect(col, options=opts, key=f"{col}_multi")
+                    if sel:
+                        cmp = series.astype(str).str.strip()
+                        mask &= cmp.isin(sel)
+
+    return mask
 
 # ---------- Wspólne UI (filtry + widok + export) ----------
-def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
+def render_app(df: pd.DataFrame, source_label: str, adv_strategy: str = "csv"):
     if df.empty:
         st.error("Plik został wczytany, ale tabela jest pusta.")
         st.stop()
@@ -197,12 +252,38 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
 
     name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
 
-    # --- Filtry zaawansowane (tylko w CSV) ---
-    ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
-    przek_range = None
+    # ---------- Filtrowanie podstawowe ----------
+    mask = pd.Series(True, index=df.index)
 
-    if show_advanced:
-        enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane", value=False)
+    if status_choice != "Wszystkie":
+        d = pd.to_numeric(df["Dostępność"], errors="coerce")
+        mask &= (d == 1) if "Aktywne" in status_choice else (d == 99)
+
+    if selected_cats:
+        mask &= cat_series.isin(selected_cats)
+
+    if selected_prods:
+        mask &= prod_series.isin(selected_prods)
+
+    if price.notna().any():
+        mask &= price.between(price_from, price_to, inclusive="both")
+
+    if stan_range is not None and "Stan" in df.columns:
+        stan_num_all = pd.to_numeric(df["Stan"], errors="coerce")
+        mask &= stan_num_all.between(stan_range[0], stan_range[1], inclusive="both")
+
+    if qty_range is not None and "Liczba sztuk" in df.columns:
+        qty_all = pd.to_numeric(df["Liczba sztuk"], errors="coerce")
+        mask &= qty_all.between(qty_range[0], qty_range[1], inclusive="both")
+
+    if name_query.strip():
+        mask &= name_series.str.contains(name_query.strip(), case=False, na=False)
+
+    # ---------- Filtry zaawansowane ----------
+    if adv_strategy == "csv":
+        ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
+        przek_range = None
+        enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane (CSV)", value=False)
         if enable_adv:
             with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=True):
                 if "ekran_dotykowy" in df.columns:
@@ -250,57 +331,43 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
                     opts = sorted(df["typ_pamieci_ram"].dropna().astype(str).str.strip().unique(), key=str.lower)
                     typ_ram_sel = st.multiselect("Typ pamięci RAM", options=opts)
 
-    # ---------- Filtrowanie ----------
-    mask = pd.Series(True, index=df.index)
+            # zastosowanie CSV-owych filtrów
+            for col, sel in {
+                "ekran_dotykowy": ekr_sel,
+                "kondycja_sprzetu": kond_sel,
+                "procesor": proc_sel,
+                "rodzaj_karty_graficznej": rodz_gpu_sel,
+                "rozdzielczosc_ekranu": rozdz_sel,
+                "stan_obudowy": stan_ob_sel,
+                "typ_pamieci_ram": typ_ram_sel,
+            }.items():
+                if sel and col in df.columns:
+                    cmp = df[col].astype(str).str.strip().str.casefold()
+                    target = pd.Series(sel).astype(str).str.strip().str.casefold().tolist()
+                    mask &= cmp.isin(target)
 
-    if status_choice != "Wszystkie":
-        d = pd.to_numeric(df["Dostępność"], errors="coerce")
-        mask &= (d == 1) if "Aktywne" in status_choice else (d == 99)
+            if 'ilosc_rdzeni' in df.columns:
+                r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
+                if 'rdzenie_sel' in locals() and rdzenie_sel:
+                    mask &= r_all.isin(rdzenie_sel)
 
-    if selected_cats:
-        mask &= cat_series.isin(selected_cats)
+            if 'przekatna_ekranu' in df.columns and 'przek_range' in locals():
+                pass  # utrzymane dla czytelności
 
-    if selected_prods:
-        mask &= prod_series.isin(selected_prods)
+            if "przekatna_ekranu" in df.columns and 'przek_range' in locals():
+                p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
+                if 'przek_range' in locals() and przek_range is not None:
+                    mask &= p_all.between(przek_range[0], przek_range[1], inclusive="both")
 
-    if price.notna().any():
-        mask &= price.between(price_from, price_to, inclusive="both")
+    elif adv_strategy == "auto":
+        # z atrybutów XML
+        excluded = {
+            "Kategoria","Producent","Nazwa","Cena","Dostępność","Liczba sztuk","ID","URL","Opis HTML"
+        }
+        excluded.update([c for c in df.columns if str(c).startswith("Zdjęcie ")])
+        mask &= _auto_advanced_filters(df, excluded)
 
-    if stan_range is not None and "Stan" in df.columns:
-        stan_num_all = pd.to_numeric(df["Stan"], errors="coerce")
-        mask &= stan_num_all.between(stan_range[0], stan_range[1], inclusive="both")
-
-    if qty_range is not None and "Liczba sztuk" in df.columns:
-        qty_all = pd.to_numeric(df["Liczba sztuk"], errors="coerce")
-        mask &= qty_all.between(qty_range[0], qty_range[1], inclusive="both")
-
-    if name_query.strip():
-        mask &= name_series.str.contains(name_query.strip(), case=False, na=False)
-
-    # Filtry zaawansowane stosuj tylko, gdy są włączone
-    if show_advanced:
-        for col, sel in {
-            "ekran_dotykowy": ekr_sel,
-            "kondycja_sprzetu": kond_sel,
-            "procesor": proc_sel,
-            "rodzaj_karty_graficznej": rodz_gpu_sel,
-            "rozdzielczosc_ekranu": rozdz_sel,
-            "stan_obudowy": stan_ob_sel,
-            "typ_pamieci_ram": typ_ram_sel,
-        }.items():
-            if sel and col in df.columns:
-                cmp = df[col].astype(str).str.strip().str.casefold()
-                target = pd.Series(sel).astype(str).str.strip().str.casefold().tolist()
-                mask &= cmp.isin(target)
-
-        if rdzenie_sel and "ilosc_rdzeni" in df.columns:
-            r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
-            mask &= r_all.isin(rdzenie_sel)
-
-        if przek_range is not None and "przekatna_ekranu" in df.columns:
-            p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
-            mask &= p_all.between(przek_range[0], przek_range[1], inclusive="both")
-
+    # ---------- Widok ----------
     filtered = df.loc[mask].copy()
     if filtered.empty:
         st.warning("Brak wierszy po zastosowaniu filtrów.")
@@ -349,36 +416,56 @@ def run_csv_mode():
     if upload is not None:
         with st.spinner("Wczytywanie pliku..."):
             df = read_any_table(upload)
-        render_app(df, upload.name, show_advanced=True)
+        render_app(df, upload.name, adv_strategy="csv")
     elif "df_csv" in st.session_state:
-        render_app(st.session_state["df_csv"], "URL:CSV", show_advanced=True)
+        render_app(st.session_state["df_csv"], "URL:CSV", adv_strategy="csv")
     else:
         st.info("Wgraj plik albo pobierz CSV z API.")
 
 # ---------- Tryb XML ----------
 def run_xml_mode():
     st.sidebar.subheader("Tryb: XML")
-    # Użytkownik podaje wyłącznie nazwę pliku; budujemy pełny URL bez zdradzania konkretnych nazw
-    base_url = "https://marekkomp.github.io/nowe_repo10.2025_allegrocsv_na_XML/output/"
-    key = st.sidebar.text_input("Nazwa pliku XML (bez .xml)", value="", placeholder="np. nazwa_pliku")
-    if st.sidebar.button("Pobierz XML"):
-        if not key.strip():
-            st.sidebar.error("Podaj nazwę pliku.")
-            st.stop()
-        xml_url = f"{base_url}{key.strip()}.xml"
-        with st.spinner("Pobieranie i parsowanie XML..."):
-            try:
-                df_xml = read_xml_build_df(xml_url)
-                st.session_state["df_xml"] = df_xml
-            except Exception:
-                st.sidebar.error("Brak dostępu lub plik nie istnieje (zła nazwa pliku).")
+
+    source = st.sidebar.radio("Źródło XML", ["GitHub (output)", "Esolu Hub (storage/feeds)"], index=0, horizontal=True)
+
+    if source == "GitHub (output)":
+        base_url = "https://marekkomp.github.io/nowe_repo10.2025_allegrocsv_na_XML/output/"
+        key = st.sidebar.text_input("Nazwa pliku XML (bez .xml)", value="", placeholder="np. nazwa_pliku")
+        if st.sidebar.button("Pobierz XML z GitHub"):
+            if not key.strip():
+                st.sidebar.error("Podaj nazwę pliku.")
                 st.stop()
+            xml_url = f"{base_url}{key.strip()}.xml"
+            with st.spinner("Pobieranie i parsowanie XML..."):
+                try:
+                    df_xml = read_xml_build_df(xml_url)
+                    st.session_state["df_xml"] = df_xml
+                    st.session_state["xml_label"] = "URL:XML (GitHub)"
+                except Exception:
+                    st.sidebar.error("Brak dostępu lub plik nie istnieje (zła nazwa pliku).")
+                    st.stop()
+    else:
+        base_url2 = "https://kompre.esolu-hub.pl/storage/feeds/"
+        key2 = st.sidebar.text_input("Nazwa pliku (bez .xml)", value="", placeholder="np. nazwa_pliku")
+        if st.sidebar.button("Pobierz XML z Esolu Hub"):
+            if not key2.strip():
+                st.sidebar.error("Podaj nazwę pliku.")
+                st.stop()
+            xml_url2 = f"{base_url2}{key2.strip()}.xml"
+            with st.spinner("Pobieranie i parsowanie XML..."):
+                try:
+                    df_xml = read_xml_build_df(xml_url2)
+                    st.session_state["df_xml"] = df_xml
+                    st.session_state["xml_label"] = "URL:XML (Esolu Hub)"
+                except Exception:
+                    st.sidebar.error("Brak dostępu lub plik nie istnieje (zła nazwa pliku).")
+                    st.stop()
 
     if "df_xml" in st.session_state:
-        # show_advanced=False → brak filtrów zaawansowanych w XML
-        render_app(st.session_state["df_xml"], "URL:XML", show_advanced=False)
+        # adv_strategy="auto" → automatyczne filtry z atrybutów XML (z możliwością włączenia/wyłączenia)
+        render_app(st.session_state["df_xml"], st.session_state.get("xml_label","URL:XML"), adv_strategy="auto")
     else:
-        st.info("Podaj nazwę pliku (bez .xml) i pobierz.")
+        st.info("Wybierz źródło, podaj nazwę pliku (bez .xml) i pobierz.")
 
 # ---------- Ekran wyboru ----------
 mode = st.sidebar.radio("Wybierz tryb aplikacji", ["CSV/XLSX", "XML"], index=0, horizontal=True)
