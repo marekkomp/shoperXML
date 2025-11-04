@@ -5,7 +5,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Filtr ofert – CSV/XLSX lub XML", layout="wide")
 st.title("⚙️ Filtr ofert – CSV/XLSX lub XML")
-st.caption("Wybierz tryb na górze. CSV/XLSX – pełne filtry (tak jak dotychczas). XML – tylko filtry podstawowe.")
+st.caption("Wybierz tryb na górze. CSV/XLSX – pełne filtry (włączane przełącznikiem). XML – filtry podstawowe.")
 
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
@@ -27,60 +27,6 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, index=False, sheet_name="dane")
     return output.getvalue()
 
-# ---------- Normalizacja nagłówków CSV z API/plików ----------
-def normalize_csv_headers(df: pd.DataFrame) -> pd.DataFrame:
-    COLMAP = {
-        # wymagane
-        "Tytuł oferty": "Nazwa",
-        "Cena PL": "Cena",
-        "Marka": "Producent",
-        "Status oferty": "Dostępność",
-
-        # opcjonalne/zaawansowane
-        "Ekran dotykowy": "ekran_dotykowy",
-        "Liczba rdzeni": "ilosc_rdzeni",
-        "Liczba rdzeni procesora": "ilosc_rdzeni",
-        "Rodzaj karty graficznej": "rodzaj_karty_graficznej",
-        "Rozdzielczość (px)": "rozdzielczosc_ekranu",
-        "Rozdzielczość": "rozdzielczosc_ekranu",
-        "Stan obudowy": "stan_obudowy",
-        "Typ pamięci RAM": "typ_pamieci_ram",
-        "Przekątna ekranu": "przekatna_ekranu",
-        "Procesor": "procesor",
-        "Kondycja sprzętu": "kondycja_sprzetu",
-
-        # zostaw bez zmian jeśli już są
-        "Stan": "Stan",
-        "Liczba sztuk": "Liczba sztuk",
-        "Kategoria": "Kategoria",
-        "Producent": "Producent",
-        "Nazwa": "Nazwa",
-        "Cena": "Cena",
-        "Dostępność": "Dostępność",
-    }
-
-    rename_map = {src: dst for src, dst in COLMAP.items() if src in df.columns and src != COLMAP.get(src)}
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
-    # typy liczbowe
-    for col in ["Cena", "Dostępność", "Stan", "Liczba sztuk"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if "przekatna_ekranu" in df.columns:
-        df["przekatna_ekranu"] = (
-            df["przekatna_ekranu"].astype(str)
-            .str.replace('"', '')
-            .str.replace(",", ".", regex=False)
-        )
-        df["przekatna_ekranu"] = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
-
-    if "ilosc_rdzeni" in df.columns:
-        df["ilosc_rdzeni"] = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
-
-    return df
-
 @st.cache_data(show_spinner=False)
 def read_xml_build_df(url: str) -> pd.DataFrame:
     import xml.etree.ElementTree as ET
@@ -101,10 +47,11 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         cat   = (o.findtext("cat")  or "").strip()
         name  = (o.findtext("name") or "").strip()
 
-        # --- Opis HTML (zachowaj tagi) ---
+        # --- Opis HTML ---
         desc_html = ""
         desc_el = o.find("desc")
         if desc_el is not None:
+            # bierzemy dzieci węzła, żeby utrzymać tagi
             desc_html = "".join(
                 ET.tostring(child, encoding="unicode", method="xml")
                 for child in list(desc_el)
@@ -124,8 +71,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
                 if u:
                     images.append(u)
 
-        if len(images) > max_imgs:
-            max_imgs = len(images)
+        max_imgs = max(max_imgs, len(images))
 
         # --- Atrybuty ---
         producent = ""
@@ -153,11 +99,11 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
             "Opis HTML": desc_html,
         }
 
-        # zdjęcia jako osobne kolumny
+        # Zdjęcia jako osobne kolumny
         for i, img in enumerate(images):
             row[f"Zdjęcie {i+1}"] = img
 
-        # pozostałe atrybuty z <attrs> jako kolumny
+        # Dodatkowe atrybuty z <attrs>
         for k, v in extra.items():
             if k not in row:
                 row[k] = v
@@ -166,13 +112,14 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
 
-    # ujednolicenie liczby kolumn zdjęć
+    # Ujednolicenie liczby kolumn zdjęć
     for i in range(1, max_imgs + 1):
         col = f"Zdjęcie {i}"
         if col not in df.columns:
             df[col] = ""
 
-    for c in ("Cena","Dostępność","Liczba sztuk"):
+    # Typy liczbowe
+    for c in ("Cena", "Dostępność", "Liczba sztuk"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -200,8 +147,11 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
 
     # --- Filtry podstawowe ---
     st.sidebar.header("Ustawienia filtrowania")
-    status_choice = st.sidebar.radio("Status produktu (kolumna 'Dostępność')",
-                                     options=["Wszystkie", "Aktywne", "Nieaktywne"], index=1)
+    status_choice = st.sidebar.radio(
+        "Status produktu (kolumna 'Dostępność')",
+        options=["Wszystkie", "Aktywne", "Nieaktywne"],
+        index=1,
+    )
 
     cats_options = sorted(df["Kategoria"].dropna().astype(str).str.strip().unique().tolist())
     selected_cats = st.sidebar.multiselect("Kategoria", options=cats_options)
@@ -217,7 +167,7 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
     with c2:
         price_to = st.number_input("Cena do", value=max_price, min_value=0.0, step=1.0, format="%.2f")
 
-    # Stan (jeśli istnieje)
+    # Stan liczbowy (jeśli istnieje)
     stan_range = None
     if "Stan" in df.columns:
         stan_num = pd.to_numeric(df["Stan"], errors="coerce")
@@ -231,7 +181,7 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
             if stan_from <= stan_to:
                 stan_range = (stan_from, stan_to)
 
-    # Ilość sztuk (z XML; jeśli istnieje)
+    # Ilość sztuk (jeśli istnieje)
     qty_range = None
     if "Liczba sztuk" in df.columns:
         qty = pd.to_numeric(df["Liczba sztuk"], errors="coerce")
@@ -248,104 +198,105 @@ def render_app(df: pd.DataFrame, source_label: str, show_advanced: bool):
     name_query = st.sidebar.text_input("Szukaj w 'Nazwa'", value="")
 
     # --- Filtry zaawansowane (tylko w CSV) ---
-    # --- Filtry zaawansowane (tylko w CSV) ---
-if show_advanced:
-    enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane", value=False)
-    if enable_adv:
-        with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=True):
-            ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
-            przek_range = None
+    ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
+    przek_range = None
 
-            if "ekran_dotykowy" in df.columns:
-                opts = sorted(df["ekran_dotykowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                ekr_sel = st.multiselect("Ekran dotykowy", options=opts)
+    if show_advanced:
+        enable_adv = st.sidebar.checkbox("🔧 Włącz filtry zaawansowane", value=False)
+        if enable_adv:
+            with st.sidebar.expander("Filtry zaawansowane (laptopy)", expanded=True):
+                if "ekran_dotykowy" in df.columns:
+                    opts = sorted(df["ekran_dotykowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    ekr_sel = st.multiselect("Ekran dotykowy", options=opts)
 
-            if "ilosc_rdzeni" in df.columns:
-                rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").dropna().astype(int)
-                if not rdz.empty:
-                    rdzenie_sel = st.multiselect("Liczba rdzeni", options=sorted(rdz.unique().tolist()))
+                if "ilosc_rdzeni" in df.columns:
+                    rdz = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").dropna().astype(int)
+                    if not rdz.empty:
+                        rdzenie_sel = st.multiselect("Liczba rdzeni", options=sorted(rdz.unique().tolist()))
 
-            if "kondycja_sprzetu" in df.columns:
-                opts = sorted(df["kondycja_sprzetu"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                kond_sel = st.multiselect("Kondycja sprzętu", options=opts)
+                if "kondycja_sprzetu" in df.columns:
+                    opts = sorted(df["kondycja_sprzetu"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    kond_sel = st.multiselect("Kondycja sprzętu", options=opts)
 
-            if "procesor" in df.columns:
-                opts = sorted(df["procesor"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                proc_sel = st.multiselect("Procesor", options=opts)
+                if "procesor" in df.columns:
+                    opts = sorted(df["procesor"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    proc_sel = st.multiselect("Procesor", options=opts)
 
-            if "przekatna_ekranu" in df.columns:
-                pe = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
-                if pe.notna().any():
-                    pmin, pmax = float(pe.min()), float(pe.max())
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        p_from = st.number_input("Przekątna od", value=pmin, min_value=0.0, step=0.1, format="%.1f")
-                    with c2:
-                        p_to = st.number_input("Przekątna do", value=pmax, min_value=0.0, step=0.1, format="%.1f")
-                    if p_from <= p_to:
-                        przek_range = (p_from, p_to)
+                if "przekatna_ekranu" in df.columns:
+                    pe = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
+                    if pe.notna().any():
+                        pmin, pmax = float(pe.min()), float(pe.max())
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            p_from = st.number_input("Przekątna od", value=pmin, min_value=0.0, step=0.1, format="%.1f")
+                        with c2:
+                            p_to = st.number_input("Przekątna do", value=pmax, min_value=0.0, step=0.1, format="%.1f")
+                        if p_from <= p_to:
+                            przek_range = (p_from, p_to)
 
-            if "rodzaj_karty_graficznej" in df.columns:
-                opts = sorted(df["rodzaj_karty_graficznej"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                rodz_gpu_sel = st.multiselect("Rodzaj karty graficznej", options=opts)
+                if "rodzaj_karty_graficznej" in df.columns:
+                    opts = sorted(df["rodzaj_karty_graficznej"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    rodz_gpu_sel = st.multiselect("Rodzaj karty graficznej", options=opts)
 
-            if "rozdzielczosc_ekranu" in df.columns:
-                opts = sorted(df["rozdzielczosc_ekranu"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                rozdz_sel = st.multiselect("Rozdzielczość ekranu", options=opts)
+                if "rozdzielczosc_ekranu" in df.columns:
+                    opts = sorted(df["rozdzielczosc_ekranu"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    rozdz_sel = st.multiselect("Rozdzielczość ekranu", options=opts)
 
-            if "stan_obudowy" in df.columns:
-                opts = sorted(df["stan_obudowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                stan_ob_sel = st.multiselect("Stan obudowy", options=opts)
+                if "stan_obudowy" in df.columns:
+                    opts = sorted(df["stan_obudowy"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    stan_ob_sel = st.multiselect("Stan obudowy", options=opts)
 
-            if "typ_pamieci_ram" in df.columns:
-                opts = sorted(df["typ_pamieci_ram"].dropna().astype(str).str.strip().unique(), key=str.lower)
-                typ_ram_sel = st.multiselect("Typ pamięci RAM", options=opts)
-    else:
-        # brak aktywnych filtrów
-        ekr_sel = rdzenie_sel = kond_sel = proc_sel = rodz_gpu_sel = rozdz_sel = stan_ob_sel = typ_ram_sel = None
-        przek_range = None
-
+                if "typ_pamieci_ram" in df.columns:
+                    opts = sorted(df["typ_pamieci_ram"].dropna().astype(str).str.strip().unique(), key=str.lower)
+                    typ_ram_sel = st.multiselect("Typ pamięci RAM", options=opts)
 
     # ---------- Filtrowanie ----------
     mask = pd.Series(True, index=df.index)
+
     if status_choice != "Wszystkie":
         d = pd.to_numeric(df["Dostępność"], errors="coerce")
         mask &= (d == 1) if "Aktywne" in status_choice else (d == 99)
+
     if selected_cats:
         mask &= cat_series.isin(selected_cats)
+
     if selected_prods:
         mask &= prod_series.isin(selected_prods)
+
     if price.notna().any():
         mask &= price.between(price_from, price_to, inclusive="both")
+
     if stan_range is not None and "Stan" in df.columns:
         stan_num_all = pd.to_numeric(df["Stan"], errors="coerce")
         mask &= stan_num_all.between(stan_range[0], stan_range[1], inclusive="both")
+
     if qty_range is not None and "Liczba sztuk" in df.columns:
         qty_all = pd.to_numeric(df["Liczba sztuk"], errors="coerce")
         mask &= qty_all.between(qty_range[0], qty_range[1], inclusive="both")
+
     if name_query.strip():
         mask &= name_series.str.contains(name_query.strip(), case=False, na=False)
 
-    # Filtry zaawansowane tylko kiedy są włączone
+    # Filtry zaawansowane stosuj tylko, gdy są włączone
     if show_advanced:
         for col, sel in {
-            "ekran_dotykowy": locals().get("ekr_sel"),
-            "kondycja_sprzetu": locals().get("kond_sel"),
-            "procesor": locals().get("proc_sel"),
-            "rodzaj_karty_graficznej": locals().get("rodz_gpu_sel"),
-            "rozdzielczosc_ekranu": locals().get("rozd_sel"),
-            "stan_obudowy": locals().get("stan_ob_sel"),
-            "typ_pamieci_ram": locals().get("typ_ram_sel"),
+            "ekran_dotykowy": ekr_sel,
+            "kondycja_sprzetu": kond_sel,
+            "procesor": proc_sel,
+            "rodzaj_karty_graficznej": rodz_gpu_sel,
+            "rozdzielczosc_ekranu": rozdz_sel,
+            "stan_obudowy": stan_ob_sel,
+            "typ_pamieci_ram": typ_ram_sel,
         }.items():
             if sel and col in df.columns:
                 cmp = df[col].astype(str).str.strip().str.casefold()
                 target = pd.Series(sel).astype(str).str.strip().str.casefold().tolist()
                 mask &= cmp.isin(target)
-        rdzenie_sel = locals().get("rdzenie_sel")
+
         if rdzenie_sel and "ilosc_rdzeni" in df.columns:
             r_all = pd.to_numeric(df["ilosc_rdzeni"], errors="coerce").astype("Int64")
             mask &= r_all.isin(rdzenie_sel)
-        przek_range = locals().get("przek_range")
+
         if przek_range is not None and "przekatna_ekranu" in df.columns:
             p_all = pd.to_numeric(df["przekatna_ekranu"], errors="coerce")
             mask &= p_all.between(przek_range[0], przek_range[1], inclusive="both")
@@ -378,6 +329,7 @@ if show_advanced:
 # ---------- Tryb CSV ----------
 def run_csv_mode():
     st.sidebar.subheader("Tryb: CSV/XLSX")
+
     upload = st.file_uploader("Wgraj plik (CSV/XLSX/XLS/XLSM)", type=["csv","xlsx","xls","xlsm"])
 
     slug = st.sidebar.text_input("Slug / hasło do CSV API (ostatni fragment URL)", value="", placeholder="np. 1234")
@@ -389,7 +341,6 @@ def run_csv_mode():
         with st.spinner("Pobieranie CSV..."):
             try:
                 df_url = pd.read_csv(url, sep=None, engine="python")
-                df_url = normalize_csv_headers(df_url)
                 st.session_state["df_csv"] = df_url
             except Exception:
                 st.sidebar.error("Nie udało się pobrać CSV (zły slug/hasło lub brak pliku).")
@@ -398,7 +349,6 @@ def run_csv_mode():
     if upload is not None:
         with st.spinner("Wczytywanie pliku..."):
             df = read_any_table(upload)
-            df = normalize_csv_headers(df)
         render_app(df, upload.name, show_advanced=True)
     elif "df_csv" in st.session_state:
         render_app(st.session_state["df_csv"], "URL:CSV", show_advanced=True)
@@ -408,7 +358,7 @@ def run_csv_mode():
 # ---------- Tryb XML ----------
 def run_xml_mode():
     st.sidebar.subheader("Tryb: XML")
-
+    # Użytkownik podaje wyłącznie nazwę pliku; budujemy pełny URL bez zdradzania konkretnych nazw
     base_url = "https://marekkomp.github.io/nowe_repo10.2025_allegrocsv_na_XML/output/"
     key = st.sidebar.text_input("Nazwa pliku XML (bez .xml)", value="", placeholder="np. nazwa_pliku")
     if st.sidebar.button("Pobierz XML"):
@@ -425,6 +375,7 @@ def run_xml_mode():
                 st.stop()
 
     if "df_xml" in st.session_state:
+        # show_advanced=False → brak filtrów zaawansowanych w XML
         render_app(st.session_state["df_xml"], "URL:XML", show_advanced=False)
     else:
         st.info("Podaj nazwę pliku (bez .xml) i pobierz.")
