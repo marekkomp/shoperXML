@@ -255,9 +255,11 @@ def render_app(df: pd.DataFrame, source_label: str, adv_strategy: str = "csv"):
     # ---------- Filtrowanie podstawowe ----------
     mask = pd.Series(True, index=df.index)
 
-    if status_choice != "Wszystkie":
-        d = pd.to_numeric(df["Dostępność"], errors="coerce")
-        mask &= (d == 1) if "Aktywne" in status_choice else (d == 99)
+    d = pd.to_numeric(df["Dostępność"], errors="coerce")
+    if status_choice in {"Aktywne", "Nieaktywne"}:
+        target = 1 if status_choice == "Aktywne" else 99
+        mask &= d == target
+
 
     if selected_cats:
         mask &= cat_series.isin(selected_cats)
