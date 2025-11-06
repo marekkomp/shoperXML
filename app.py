@@ -281,56 +281,65 @@ def render_app(df: pd.DataFrame, source_label: str, adv_strategy: str = "csv"):
     if name_query.strip():
         mask &= name_series.str.contains(name_query.strip(), case=False, na=False)
 
-    # --- DIAGNOSTYKA PO ID ---
-check_id = st.sidebar.text_input("Sprawdź ID rekordu", value="")
-def _why_excluded(row):
-    reasons = []
+        # --- DIAGNOSTYKA PO ID ---
+    check_id = st.sidebar.text_input("Sprawdź ID rekordu", value="")
 
-    d = pd.to_numeric(row.get("Dostępność"), errors="coerce")
-    if status_choice == "Aktywne" and d != 1:
-        reasons.append("status≠1")
-    if status_choice == "Nieaktywne" and d != 99:
-        reasons.append("status≠99")
+    def _why_excluded(row: dict) -> list:
+        reasons = []
 
-    if selected_cats and row.get("Kategoria", "").strip() not in selected_cats:
-        reasons.append("kategoria nie na liście")
-    if selected_prods and row.get("Producent", "").strip() not in selected_prods:
-        reasons.append("producent nie na liście")
+        # Status
+        d = pd.to_numeric(row.get("Dostępność"), errors="coerce")
+        if status_choice == "Aktywne" and d != 1:
+            reasons.append("status≠1")
+        if status_choice == "Nieaktywne" and d != 99:
+            reasons.append("status≠99")
 
-    pr = pd.to_numeric(row.get("Cena"), errors="coerce")
-    if price.notna().any():
-        if not (pd.isna(pr) or (price_from <= pr <= price_to)):
-            reasons.append(f"cena poza zakresem [{price_from}, {price_to}]")
+        # Kategoria / Producent
+        if selected_cats and str(row.get("Kategoria","")).strip() not in selected_cats:
+            reasons.append("kategoria nie na liście")
+        if selected_prods and str(row.get("Producent","")).strip() not in selected_prods:
+            reasons.append("producent nie na liście")
 
-    if stan_range is not None and "Stan" in df.columns:
-        stn = pd.to_numeric(row.get("Stan"), errors="coerce")
-        if not (pd.isna(stn) or (stan_range[0] <= stn <= stan_range[1])):
-            reasons.append(f"stan poza [{stan_range[0]}, {stan_range[1]}]")
+        # Cena
+        pr = pd.to_numeric(row.get("Cena"), errors="coerce")
+        if price.notna().any() and not (pd.isna(pr) or (price_from <= pr <= price_to)):
+            reasons.append(f"cena poza [{price_from}, {price_to}]")
 
-    if qty_range is not None and "Liczba sztuk" in df.columns:
-        qv = pd.to_numeric(row.get("Liczba sztuk"), errors="coerce")
-        if not (pd.isna(qv) or (qty_range[0] <= qv <= qty_range[1])):
-            reasons.append(f"ilość poza [{qty_range[0]}, {qty_range[1]}]")
+        # Stan (jeśli aktywny)
+        if stan_range is not None and "Stan" in df.columns:
+            stn = pd.to_numeric(row.get("Stan"), errors="coerce")
+            if not (pd.isna(stn) or (stan_range[0] <= stn <= stan_range[1])):
+                reasons.append(f"stan poza [{stan_range[0]}, {stan_range[1]}]")
 
-    if name_query.strip():
-        if not str(row.get("Nazwa","")).lower().__contains__(name_query.strip().lower()):
+        # Ilość (jeśli aktywna)
+        if qty_range is not None and "Liczba sztuk" in df.columns:
+            qv = pd.to_numeric(row.get("Liczba sztuk"), errors="coerce")
+            if not (pd.isna(qv) or (qty_range[0] <= qv <= qty_range[1])):
+                reasons.append(f"ilość poza [{qty_range[0]}, {qty_range[1]}]")
+
+        # Nazwa
+        if name_query.strip() and name_query.strip().lower() not in str(row.get("Nazwa","")).lower():
             reasons.append("nazwa nie zawiera frazy")
 
-    return reasons
+        return reasons
 
-if check_id.strip():
-    row = df.loc[df["ID"].astype(str) == check_id.strip()]
-    if row.empty:
-        st.sidebar.warning("Brak rekordu o podanym ID w surowych danych.")
-    else:
-        r = row.iloc[0].to_dict()
-        reasons = _why_excluded(r)
-        st.sidebar.write(f"ID {check_id}:")
-        st.sidebar.write(f"Kategoria={r.get('Kategoria')} | Producent={r.get('Producent')} | Cena={r.get('Cena')} | Dostępność={r.get('Dostępność')} | Sztuk={r.get('Liczba sztuk')}")
-        if not reasons:
-            st.sidebar.success("✅ Przechodzi wszystkie filtry")
+    if check_id.strip():
+        row_df = df[df["ID"].astype(str) == check_id.strip()]
+        if row_df.empty:
+            st.sidebar.warning("Brak rekordu o podanym ID w surowych danych.")
         else:
-            st.sidebar.error("🚫 Wycięty przez: " + ", ".join(reasons))
+            r = row_df.iloc[0].to_dict()
+            reasons = _why_excluded(r)
+            st.sidebar.write(f"ID {check_id}:")
+            st.sidebar.write(
+                f"Kategoria={r.get('Kategoria')} | Producent={r.get('Producent')} | "
+                f"Cena={r.get('Cena')} | Dostępność={r.get('Dostępność')} | Sztuk={r.get('Liczba sztuk')}"
+            )
+            if reasons:
+                st.sidebar.error("🚫 Wycięty przez: " + ", ".join(reasons))
+            else:
+                st.sidebar.success("✅ Przechodzi wszystkie filtry")
+
 
 
     # ---------- Filtry zaawansowane ----------
