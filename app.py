@@ -45,6 +45,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
         avail = (o.get("avail") or "").strip()
         stock = (o.get("stock") or "").strip()
         cat   = (o.findtext("cat")  or "").strip()
+        subcat = (o.findtext("subcat") or "").strip()   # <── DODANE
         name  = (o.findtext("name") or "").strip()
 
         # --- Opis HTML ---
@@ -88,6 +89,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
         row = {
             "Kategoria": cat,
+            "Podkategoria": subcat,                      # <── DODANE
             "Producent": producent,
             "Nazwa": name,
             "Cena": price.replace(",", "."),
