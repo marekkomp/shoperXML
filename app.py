@@ -495,7 +495,7 @@ def run_xml_mode():
         read_xml_build_df.clear()
         st.session_state.pop("df_xml", None)
         st.session_state.pop("xml_label", None)
-        st.experimental_rerun()
+        st.rerun()
 
     source = st.sidebar.radio("Źródło XML", ["GitHub (output)", "Esolu Hub (storage/feeds)"], index=0, horizontal=True)
 
