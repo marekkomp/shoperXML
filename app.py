@@ -27,7 +27,7 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
         df.to_excel(writer, index=False, sheet_name="dane")
     return output.getvalue()
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=1800)  # 30 minut
 def read_xml_build_df(url: str) -> pd.DataFrame:
     import xml.etree.ElementTree as ET
     from urllib.request import urlopen
