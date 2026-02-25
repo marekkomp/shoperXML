@@ -104,7 +104,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
         # zdjęcia: "Zdjęcie 1", "Zdjęcie 2", ...
         for i, img in enumerate(images):
-            row[f"Zdjęcie {i+1}"] = img
+            row[f"Zdjęcie produktu {i+1}"] = img
 
         # atrybuty jako kolumny (setki kolumn -> OK)
         for k, v in extra.items():
@@ -117,7 +117,7 @@ def read_xml_build_df(url: str) -> pd.DataFrame:
 
     # Ujednolicenie liczby kolumn zdjęć
     for i in range(1, max_imgs + 1):
-        col = f"Zdjęcie {i}"
+        col = f"Zdjęcie produktu  {i}"
         if col not in df.columns:
             df[col] = ""
 
@@ -433,7 +433,7 @@ def render_app(df: pd.DataFrame, source_label: str, adv_strategy: str = "csv"):
             "URL",
             "Opis (PL)",
         }
-        excluded.update([c for c in df.columns if str(c).startswith("Zdjęcie ")])
+        excluded.update([c for c in df.columns if str(c).startswith("Zdjęcie produktu ")])
         mask &= _auto_advanced_filters(df, excluded)
 
     # ---------- Widok ----------
